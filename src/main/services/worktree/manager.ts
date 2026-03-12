@@ -8,11 +8,24 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, appendFile, access } from 'node:fs/promises';
+import { readFile, appendFile, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import type { WorktreeInfo } from '@/shared/types/worktree.types';
 
 const execFileAsync = promisify(execFile);
+
+// --- Diagnostic file logger for worktree ---
+const wtLogDir = join(homedir(), '.muxvo', 'logs');
+const wtLogPath = join(wtLogDir, 'worktree-debug.log');
+
+function wtLog(msg: string): void {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] ${msg}\n`;
+  mkdir(wtLogDir, { recursive: true })
+    .then(() => appendFile(wtLogPath, line))
+    .catch(() => {});
+}
 
 /** Run a git command in a given directory */
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -103,8 +116,10 @@ export function createWorktreeManager() {
     async detectRepo(
       path: string
     ): Promise<{ isRepo: boolean; repoPath?: string; branch?: string }> {
+      wtLog(`[detectRepo] path=${path}`);
       try {
         let repoPath = await git(path, ['rev-parse', '--show-toplevel']);
+        wtLog(`[detectRepo] show-toplevel=${repoPath}`);
         // --show-toplevel from a worktree returns the worktree root, not the main repo.
         // Use --git-common-dir to resolve the actual main repo path.
         try {
@@ -120,8 +135,12 @@ export function createWorktreeManager() {
         try {
           branch = await git(path, ['rev-parse', '--abbrev-ref', 'HEAD']);
         } catch { /* no commits yet — branch unknown */ }
+        wtLog(`[detectRepo] OK isRepo=true repoPath=${repoPath} branch=${branch}`);
         return { isRepo: true, repoPath, branch };
-      } catch {
+      } catch (err: any) {
+        const stderr = err?.stderr || '';
+        const msg = err?.message || String(err);
+        wtLog(`[detectRepo] FAILED path=${path} error=${msg} stderr=${stderr}`);
         return { isRepo: false };
       }
     },
