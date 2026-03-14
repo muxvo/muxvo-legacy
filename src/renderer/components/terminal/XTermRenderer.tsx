@@ -100,6 +100,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
 
     // Create terminal synchronously with defaults (ensures immediate render)
     const term = new Terminal({
+      scrollback: 5000, // 显式设置上限，防止无限增长
       cursorBlink: DEFAULT_TERMINAL_CONFIG.cursorBlink,
       cursorStyle: DEFAULT_TERMINAL_CONFIG.cursorStyle,
       fontSize: DEFAULT_TERMINAL_CONFIG.fontSize,

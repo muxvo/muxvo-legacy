@@ -24,6 +24,7 @@ export function createAnalyticsTracker(options?: TrackerOptions) {
   const uploadQueue: StoredEvent[] = [];
   let retryCount = 0;
   const MAX_RETRIES = 3;
+  const MAX_EVENTS = 50000;
 
   let uploadTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -34,6 +35,10 @@ export function createAnalyticsTracker(options?: TrackerOptions) {
         params: input.params,
         timestamp: new Date().toISOString(),
       });
+      // 超过上限时丢弃最旧的 10%
+      if (events.length > MAX_EVENTS) {
+        events.splice(0, Math.floor(MAX_EVENTS * 0.1));
+      }
       if (options?.upload) {
         uploadQueue.push({
           event: input.event,

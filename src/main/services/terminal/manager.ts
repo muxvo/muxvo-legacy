@@ -59,6 +59,8 @@ interface ManagedTerminal {
   spawnedAt: number;
   /** Whether shell init keybindings (Home/End) have been injected */
   shellInitDone?: boolean;
+  /** graceful close 的 resolve 函数 */
+  exitResolve?: (result: { success: boolean }) => void;
 }
 
 interface TerminalManagerDeps {
@@ -76,6 +78,22 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
   const ptyAdapter = deps?.pty;
   const perfLogger = deps?.perfLogger;
   const debugLog = deps?.debugLogger ?? (() => {});
+
+  // IPC 输出节流：合并高频 onData 为每 16ms 一次 IPC 推送
+  const pendingIpcOutput = new Map<string, string>();
+  let ipcFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const IPC_FLUSH_INTERVAL_MS = 16;
+
+  function flushIpcOutput(): void {
+    for (const [tid, buf] of pendingIpcOutput) {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.TERMINAL.OUTPUT, { id: tid, data: buf });
+      }
+    }
+    pendingIpcOutput.clear();
+    ipcFlushTimer = null;
+  }
 
   // Debounce state change pushes to avoid rapid Running↔WaitingInput oscillation
   // causing excessive React re-renders (e.g. user pressing up/down in yes/no prompt)
@@ -198,13 +216,14 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
             outputBuffers.set(id, updated);
           }
 
-          const win = BrowserWindow.getAllWindows()[0];
-          if (win) {
-            win.webContents.send(IPC_CHANNELS.TERMINAL.OUTPUT, { id, data });
+          const prev = pendingIpcOutput.get(id) ?? '';
+          pendingIpcOutput.set(id, prev + data);
+          if (!ipcFlushTimer) {
+            ipcFlushTimer = setTimeout(flushIpcOutput, IPC_FLUSH_INTERVAL_MS);
           }
           // Sampled diagnostic log (1% of output events)
           if (Math.random() < 0.01) {
-            debugLog(`[TERM:ipcPush] id=${id} bytes=${data.length} bufSize=${updated.length} winExists=${!!win} winDestroyed=${win?.isDestroyed() ?? 'N/A'}`);
+            debugLog(`[TERM:ipcPush] id=${id} bytes=${data.length} bufSize=${updated.length} pendingBuf=${(pendingIpcOutput.get(id) ?? '').length}`);
           }
 
           // Detect OSC 7 cwd change: \x1b]7;file://hostname/path\x07 or \x1b]7;file://hostname/path\x1b\\
@@ -272,13 +291,22 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
           machine.send('EXIT_NORMAL');
 
           const win = BrowserWindow.getAllWindows()[0];
-          if (win) {
+          if (win && !win.isDestroyed()) {
             win.webContents.send(IPC_CHANNELS.TERMINAL.EXIT, { id, code });
           }
 
           pushStateChange(id, machine.state);
+
+          // 如果有 graceful close 在等待，resolve 它
+          const t = terminals.get(id);
+          if (t?.exitResolve) {
+            t.exitResolve({ success: true });
+            t.exitResolve = undefined;
+          }
+
           terminals.delete(id);
           outputBuffers.delete(id);
+          pendingIpcOutput.delete(id);
           resetInputDetector(id);
           if (terminals.size === 0) stopCwdPolling();
         });
@@ -339,6 +367,7 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
       terminal.process.kill();
       terminals.delete(id);
       outputBuffers.delete(id);
+      pendingIpcOutput.delete(id);
       resetInputDetector(id);
       if (terminals.size === 0) stopCwdPolling();
       return { success: true };
@@ -352,22 +381,21 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
     return new Promise<{ success: boolean }>((resolve) => {
       const timeout = setTimeout(() => {
         // Timeout — force kill
+        terminal.exitResolve = undefined; // 防止全局 onExit 再 resolve
         terminal.process.kill();
         terminals.delete(id);
         outputBuffers.delete(id);
+        pendingIpcOutput.delete(id);
         resetInputDetector(id);
         if (terminals.size === 0) stopCwdPolling();
         resolve({ success: true });
       }, GRACEFUL_CLOSE_TIMEOUT);
 
-      terminal.process.onExit(() => {
+      // 不再注册新的 onExit！改为设置 resolve 函数，让全局 onExit 来调用
+      terminal.exitResolve = (result) => {
         clearTimeout(timeout);
-        terminals.delete(id);
-        outputBuffers.delete(id);
-        resetInputDetector(id);
-        if (terminals.size === 0) stopCwdPolling();
-        resolve({ success: true });
-      });
+        resolve(result);
+      };
     });
   }
 
@@ -455,6 +483,13 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
   }
 
   function closeAll(): void {
+    // 清理 IPC 节流缓冲
+    if (ipcFlushTimer) {
+      clearTimeout(ipcFlushTimer);
+      ipcFlushTimer = null;
+    }
+    pendingIpcOutput.clear();
+
     for (const [id, terminal] of terminals) {
       terminal.process.kill();
       terminals.delete(id);

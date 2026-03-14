@@ -45,6 +45,14 @@ interface EventEntry {
   terminalId?: string;
 }
 
+const MAX_RING_SIZE = 2000;
+
+interface RingBuffer {
+  entries: EventEntry[];
+  writeIdx: number;
+  count: number;
+}
+
 export interface PerfLogger {
   /** Record an event occurrence. Call from hot paths — O(1) amortized. */
   track(event: EventType, terminalId?: string): void;
@@ -56,11 +64,11 @@ export function createPerfLogger(thresholds?: Partial<ThresholdConfig>): PerfLog
   const config: ThresholdConfig = { ...DEFAULT_THRESHOLDS, ...thresholds };
   const startTime = Date.now();
 
-  // Per-event-type ring buffers (timestamps only, cheap to maintain)
-  const buffers: Record<EventType, EventEntry[]> = {
-    termOutput: [],
-    ipcPush: [],
-    fsWatch: [],
+  // Per-event-type ring buffers (fixed-size, O(1) insert)
+  const buffers: Record<EventType, RingBuffer> = {
+    termOutput: { entries: new Array(MAX_RING_SIZE), writeIdx: 0, count: 0 },
+    ipcPush: { entries: new Array(MAX_RING_SIZE), writeIdx: 0, count: 0 },
+    fsWatch: { entries: new Array(MAX_RING_SIZE), writeIdx: 0, count: 0 },
   };
 
   let logDirEnsured = false;
@@ -96,22 +104,25 @@ export function createPerfLogger(thresholds?: Partial<ThresholdConfig>): PerfLog
     } catch { /* ignore write errors */ }
   }
 
-  function pruneOldEntries(entries: EventEntry[], now: number): void {
+  function pruneOldEntries(ring: RingBuffer, now: number): void {
     const cutoff = now - WINDOW_MS;
-    // Remove entries older than window (entries are in chronological order)
-    while (entries.length > 0 && entries[0].ts < cutoff) {
-      entries.shift();
+    while (ring.count > 0) {
+      const readIdx = (ring.writeIdx - ring.count + MAX_RING_SIZE) % MAX_RING_SIZE;
+      if (ring.entries[readIdx].ts >= cutoff) break;
+      ring.count--;
     }
   }
 
-  function getRate(entries: EventEntry[]): number {
-    return entries.length / (WINDOW_MS / 1000);
+  function getRate(ring: RingBuffer): number {
+    return ring.count / (WINDOW_MS / 1000);
   }
 
   // Find the terminal with most events in the window
-  function getTopTerminal(entries: EventEntry[]): string | undefined {
+  function getTopTerminal(ring: RingBuffer): string | undefined {
     const counts = new Map<string, number>();
-    for (const e of entries) {
+    for (let i = 0; i < ring.count; i++) {
+      const idx = (ring.writeIdx - ring.count + i + MAX_RING_SIZE) % MAX_RING_SIZE;
+      const e = ring.entries[idx];
       if (e.terminalId) {
         counts.set(e.terminalId, (counts.get(e.terminalId) || 0) + 1);
       }
@@ -165,7 +176,10 @@ export function createPerfLogger(thresholds?: Partial<ThresholdConfig>): PerfLog
 
   return {
     track(event: EventType, terminalId?: string): void {
-      buffers[event].push({ ts: Date.now(), terminalId });
+      const ring = buffers[event];
+      ring.entries[ring.writeIdx] = { ts: Date.now(), terminalId };
+      ring.writeIdx = (ring.writeIdx + 1) % MAX_RING_SIZE;
+      if (ring.count < MAX_RING_SIZE) ring.count++;
     },
     dispose(): void {
       clearInterval(timer);
