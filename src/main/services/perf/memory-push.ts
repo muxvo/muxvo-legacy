@@ -12,6 +12,7 @@ import { createMemoryMonitor } from './memory-monitor';
 interface MemoryPushOptions {
   intervalMs: number;
   thresholdMB: number;
+  onExceeded?: () => void;
 }
 
 export function createMemoryPushTimer(opts: MemoryPushOptions) {
@@ -21,12 +22,15 @@ export function createMemoryPushTimer(opts: MemoryPushOptions) {
   function check(): void {
     const result = monitor.checkMemory();
     if (result.exceeded) {
+      opts.onExceeded?.();
       const payload = {
         usageMB: result.currentMB,
         threshold: opts.thresholdMB,
       };
       BrowserWindow.getAllWindows().forEach((win) => {
-        win.webContents.send(IPC_CHANNELS.APP.MEMORY_WARNING, payload);
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC_CHANNELS.APP.MEMORY_WARNING, payload);
+        }
       });
     }
   }

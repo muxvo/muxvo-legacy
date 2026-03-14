@@ -683,7 +683,14 @@ app.whenReady().then(() => {
   configWatcher.start();
 
   // Memory warning push (60s interval, 2GB threshold)
-  memoryPush = createMemoryPushTimer({ intervalMs: 60000, thresholdMB: 2048 });
+  memoryPush = createMemoryPushTimer({
+    intervalMs: 60000,
+    thresholdMB: 2048,
+    onExceeded: () => {
+      tracker?.clear();
+      console.warn('[MUXVO] Memory exceeded threshold, analytics events cleared');
+    },
+  });
   memoryPush.start();
 
   // Sync status pusher (available for sync operations to report progress)
