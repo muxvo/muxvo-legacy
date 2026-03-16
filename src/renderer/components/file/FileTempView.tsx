@@ -544,6 +544,7 @@ export function FileTempView({
             terminals={sidebarTerminals}
             onSelect={onSelectTerminal}
             onClose={onCloseTerminal}
+            allowResize
             style={{ width: rightWidth, flexShrink: 0, opacity: 0, transition: 'opacity 0.3s ease 0.15s' }}
             className={entered ? 'file-temp-view__sidebar--entered' : ''}
           />
