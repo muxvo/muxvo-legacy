@@ -968,6 +968,18 @@ app.whenReady().then(() => {
 
   launchWindowWithTerminals();
 
+  // 内存诊断：每 30 秒打印主进程内存和关键数据结构大小
+  setInterval(() => {
+    const mem = process.memoryUsage();
+    const rss = Math.round(mem.rss / 1024 / 1024);
+    const heapUsed = Math.round(mem.heapUsed / 1024 / 1024);
+    const heapTotal = Math.round(mem.heapTotal / 1024 / 1024);
+    const external = Math.round(mem.external / 1024 / 1024);
+    const arrayBuffers = Math.round(mem.arrayBuffers / 1024 / 1024);
+    const termCount = terminalManager?.list().length ?? 0;
+    console.warn(`[MUXVO:mem-diag] rss=${rss}MB heap=${heapUsed}/${heapTotal}MB external=${external}MB arrayBuf=${arrayBuffers}MB terminals=${termCount}`);
+  }, 30_000);
+
   // Analytics: track session start
   tracker?.track({
     event: 'session.start',
