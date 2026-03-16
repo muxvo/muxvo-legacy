@@ -50,6 +50,7 @@ export function WorktreePopover({
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repoWarning, setRepoWarning] = useState<{ sizeMB: number; message: string } | null>(null);
 
   // Detect repo and load worktrees when opened
   useEffect(() => {
@@ -69,6 +70,14 @@ export function WorktreePopover({
         }
         const repo = detectResult.data.repoPath!;
         setRepoPath(repo);
+
+        // Pre-check repo size for large repo warning
+        try {
+          const checkResult = await window.api.worktree.preCheck(repo);
+          if (!cancelled && checkResult.success && checkResult.data?.warning) {
+            setRepoWarning(checkResult.data.warning);
+          }
+        } catch { /* ignore pre-check failure */ }
 
         const listResult = await window.api.worktree.list(repo);
         if (cancelled) return;
@@ -157,10 +166,25 @@ export function WorktreePopover({
           setWorktrees(listResult.data);
         }
       } else {
-        setError(result.error?.message || 'Failed to create worktree');
+        const msg = result.error?.message || 'Failed to create worktree';
+        // Enhance timeout errors with actionable guidance
+        if (msg.includes('TIMEOUT') || msg.includes('timed out') || msg.includes('ETIMEDOUT')) {
+          setError(repoWarning
+            ? `创建超时 — .git 目录过大（${repoWarning.sizeMB} MB），请用 git filter-repo 清理历史中的大文件后重试`
+            : `创建超时 — 仓库可能过大，请检查 .git 目录大小`);
+        } else {
+          setError(msg);
+        }
       }
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      if (msg.includes('TIMEOUT') || msg.includes('timed out') || msg.includes('ETIMEDOUT')) {
+        setError(repoWarning
+          ? `创建超时 — .git 目录过大（${repoWarning.sizeMB} MB），请用 git filter-repo 清理历史中的大文件后重试`
+          : `创建超时 — 仓库可能过大，请检查 .git 目录大小`);
+      } else {
+        setError(msg);
+      }
     } finally {
       setCreating(false);
     }
@@ -231,12 +255,19 @@ export function WorktreePopover({
         {/* "+ New Worktree" at the top, always visible */}
         {!loading && !error && repoPath && (
           <>
+            {repoWarning && (
+              <div className="worktree-popover__warning">
+                .git {repoWarning.sizeMB} MB — 创建可能较慢，建议清理历史大文件
+              </div>
+            )}
             <button
               className="worktree-popover__create"
               onClick={handleCreateWorktree}
               disabled={creating}
             >
-              {creating ? 'Creating...' : `+ New Worktree (from ${worktrees.find(wt => wt.isMain)?.branch || 'main'})`}
+              {creating
+                ? (repoWarning ? 'Creating... (仓库较大，请耐心等待)' : 'Creating...')
+                : `+ New Worktree (from ${worktrees.find(wt => wt.isMain)?.branch || 'main'})`}
             </button>
             <div className="worktree-popover__divider" />
           </>

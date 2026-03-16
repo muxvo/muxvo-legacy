@@ -131,6 +131,16 @@
   margin: 4px 0;
 }
 
+.worktree-popover__warning {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #fab387;
+  background: rgba(250, 179, 135, 0.08);
+  border-left: 2px solid #fab387;
+  margin: 0 8px 4px;
+  border-radius: 0 4px 4px 0;
+}
+
 .worktree-popover__create {
   display: block;
   width: 100%;
