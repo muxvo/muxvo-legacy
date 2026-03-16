@@ -129,5 +129,6 @@ export const IPC_CHANNELS = {
     REMOVE: 'worktree:remove',
     RENAME: 'worktree:rename',
     DETECT_REPO: 'worktree:detect-repo',
+    PRE_CHECK: 'worktree:pre-check',
   },
 } as const;

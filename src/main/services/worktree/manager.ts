@@ -28,10 +28,22 @@ function wtLog(msg: string): void {
 }
 
 /** Run a git command in a given directory */
-async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, timeout: 15_000 });
+async function git(cwd: string, args: string[], timeoutMs = 15_000): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd, timeout: timeoutMs });
   return stdout.trim();
 }
+
+/** Get .git directory size in MB (for pre-check warnings) */
+async function getGitDirSizeMB(repoPath: string): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync('du', ['-sk', join(repoPath, '.git')], { timeout: 5_000 });
+    return parseInt(stdout.split('\t')[0], 10) / 1024;
+  } catch {
+    return 0; // can't measure — skip warning
+  }
+}
+
+const LARGE_REPO_THRESHOLD_MB = 500;
 
 /** Parse `git worktree list --porcelain` output into WorktreeInfo[] */
 function parseWorktreeList(output: string, repoPath: string): WorktreeInfo[] {
@@ -177,9 +189,34 @@ export function createWorktreeManager() {
      * Create a new worktree with auto-incremented naming.
      * Returns the new worktree path and branch name.
      */
+    /**
+     * Pre-check repo size. Returns a warning if .git is too large.
+     */
+    async preCheck(
+      repoPath: string
+    ): Promise<{ warning?: { sizeMB: number; message: string } }> {
+      const sizeMB = await getGitDirSizeMB(repoPath);
+      if (sizeMB > LARGE_REPO_THRESHOLD_MB) {
+        return {
+          warning: {
+            sizeMB: Math.round(sizeMB),
+            message: `.git 目录过大（${Math.round(sizeMB)} MB），创建 worktree 可能很慢。建议用 git filter-repo 清理历史中的大文件。`,
+          },
+        };
+      }
+      return {};
+    },
+
+    /**
+     * Create a new worktree with auto-incremented naming.
+     * Returns the new worktree path and branch name.
+     */
     async create(
       repoPath: string
-    ): Promise<{ worktreePath: string; branch: string }> {
+    ): Promise<{ worktreePath: string; branch: string; warning?: { sizeMB: number; message: string } }> {
+      // Pre-check repo size
+      const { warning } = await this.preCheck(repoPath);
+
       // Ensure .worktrees/ is gitignored
       await ensureGitignore(repoPath);
 
@@ -211,10 +248,10 @@ export function createWorktreeManager() {
       const branch = `wt-${num}`;
       const worktreePath = join(repoPath, '.worktrees', branch);
 
-      // Create the worktree
-      await git(repoPath, ['worktree', 'add', '-b', branch, worktreePath]);
+      // Create the worktree (30s timeout for large repos)
+      await git(repoPath, ['worktree', 'add', '-b', branch, worktreePath], 30_000);
 
-      return { worktreePath, branch };
+      return { worktreePath, branch, warning };
     },
 
     /**

@@ -290,6 +290,8 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.WORKTREE.DETECT_REPO, { path }),
     list: (repoPath: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.WORKTREE.LIST, { repoPath }),
+    preCheck: (repoPath: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WORKTREE.PRE_CHECK, { repoPath }),
     create: (repoPath: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.WORKTREE.CREATE, { repoPath }),
     remove: (worktreePath: string, force?: boolean) =>

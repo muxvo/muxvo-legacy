@@ -29,6 +29,16 @@ export function createWorktreeHandlers(manager?: WorktreeManager) {
       }
     },
 
+    async preCheck(params: { repoPath: string }) {
+      try {
+        const result = await mgr.preCheck(params.repoPath);
+        return { success: true, data: result };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { success: false, error: { code: 'WORKTREE_PRECHECK_ERROR', message } };
+      }
+    },
+
     async create(params: { repoPath: string }) {
       try {
         const result = await mgr.create(params.repoPath);
@@ -69,6 +79,9 @@ export function registerWorktreeHandlers(manager?: WorktreeManager): void {
   );
   ipcMain.handle(IPC_CHANNELS.WORKTREE.LIST, (_event, params) =>
     h.list(params)
+  );
+  ipcMain.handle(IPC_CHANNELS.WORKTREE.PRE_CHECK, (_event, params) =>
+    h.preCheck(params)
   );
   ipcMain.handle(IPC_CHANNELS.WORKTREE.CREATE, (_event, params) =>
     h.create(params)
