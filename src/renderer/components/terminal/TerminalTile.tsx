@@ -36,6 +36,7 @@ interface Props {
   onRename?: (id: string, name: string) => void;
   onBackToTiling?: () => void;
   onSidebarSwitch?: () => void;
+  suppressResize?: boolean;
 }
 
 function TerminalTileInner({
@@ -61,6 +62,7 @@ function TerminalTileInner({
   onRename,
   onBackToTiling,
   onSidebarSwitch,
+  suppressResize,
 }: Props): JSX.Element {
   const tileRef = useRef<HTMLDivElement>(null);
   const naming = useNaming(id, customName, onRename);
@@ -154,7 +156,7 @@ function TerminalTileInner({
 
       {/* Terminal content */}
       <div className="tile-terminal" onClick={compact ? (e) => e.stopPropagation() : undefined}>
-        <XTermRenderer terminalId={id} suppressResize={compact} />
+        <XTermRenderer terminalId={id} suppressResize={suppressResize ?? compact} />
       </div>
     </div>
   );
@@ -171,6 +173,7 @@ export const TerminalTile = memo(TerminalTileInner, (prev, next) => {
     prev.staggerIndex === next.staggerIndex &&
     prev.draggable === next.draggable &&
     prev.dragState === next.dragState &&
-    prev.customName === next.customName
+    prev.customName === next.customName &&
+    prev.suppressResize === next.suppressResize
   );
 });

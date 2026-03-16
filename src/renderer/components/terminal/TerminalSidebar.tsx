@@ -8,9 +8,10 @@ interface TerminalSidebarProps {
   onClose?: (id: string) => void;
   className?: string;
   style?: React.CSSProperties;
+  allowResize?: boolean;
 }
 
-export function TerminalSidebar({ terminals, onSelect, onClose, className, style }: TerminalSidebarProps) {
+export function TerminalSidebar({ terminals, onSelect, onClose, className, style, allowResize }: TerminalSidebarProps) {
   const visibleCount = Math.min(terminals.length, 3);
   return (
     <div className={`terminal-sidebar ${className ?? ''}`} style={style}>
@@ -32,6 +33,7 @@ export function TerminalSidebar({ terminals, onSelect, onClose, className, style
             cwd={t.cwd}
             customName={t.customName}
             compact
+            suppressResize={allowResize ? false : undefined}
             onClose={onClose ? () => onClose(t.id) : undefined}
           />
         </div>
