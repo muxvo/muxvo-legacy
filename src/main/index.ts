@@ -968,17 +968,46 @@ app.whenReady().then(() => {
 
   launchWindowWithTerminals();
 
-  // 内存诊断：每 30 秒打印主进程内存和关键数据结构大小
-  setInterval(() => {
-    const mem = process.memoryUsage();
-    const rss = Math.round(mem.rss / 1024 / 1024);
-    const heapUsed = Math.round(mem.heapUsed / 1024 / 1024);
-    const heapTotal = Math.round(mem.heapTotal / 1024 / 1024);
-    const external = Math.round(mem.external / 1024 / 1024);
-    const arrayBuffers = Math.round(mem.arrayBuffers / 1024 / 1024);
-    const termCount = terminalManager?.list().length ?? 0;
-    console.warn(`[MUXVO:mem-diag] rss=${rss}MB heap=${heapUsed}/${heapTotal}MB external=${external}MB arrayBuf=${arrayBuffers}MB terminals=${termCount}`);
-  }, 30_000);
+  // 内存诊断：每 30 秒写入 ~/.muxvo/logs/mem-diag.log
+  {
+    const { appendFile: memAppendFile, mkdir: memMkdir, stat: memStat, writeFile: memWriteFile, readFile: memReadFile } = require('fs/promises');
+    const memLogDir = require('path').join(require('os').homedir(), '.muxvo', 'logs');
+    const memLogPath = require('path').join(memLogDir, 'mem-diag.log');
+    const MEM_LOG_MAX_BYTES = 500 * 1024;
+    const MEM_LOG_KEEP_BYTES = 200 * 1024;
+
+    async function writeMemDiag(line: string): Promise<void> {
+      try {
+        await memMkdir(memLogDir, { recursive: true });
+        const ts = new Date().toISOString();
+        await memAppendFile(memLogPath, `[${ts}] ${line}\n`);
+        // 自动轮转
+        const s = await memStat(memLogPath).catch(() => null);
+        if (s && s.size > MEM_LOG_MAX_BYTES) {
+          const content = await memReadFile(memLogPath, 'utf-8');
+          const trimmed = content.slice(content.length - MEM_LOG_KEEP_BYTES);
+          const nl = trimmed.indexOf('\n');
+          await memWriteFile(memLogPath, nl >= 0 ? trimmed.slice(nl + 1) : trimmed);
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 渲染进程内存诊断中继：renderer 通过 IPC 发送，main 写入同一日志
+    ipcMain.on('mem-diag:renderer', (_event, data: { message: string }) => {
+      if (data?.message) writeMemDiag(data.message);
+    });
+
+    setInterval(() => {
+      const mem = process.memoryUsage();
+      const rss = Math.round(mem.rss / 1024 / 1024);
+      const heapUsed = Math.round(mem.heapUsed / 1024 / 1024);
+      const heapTotal = Math.round(mem.heapTotal / 1024 / 1024);
+      const external = Math.round(mem.external / 1024 / 1024);
+      const arrayBuffers = Math.round(mem.arrayBuffers / 1024 / 1024);
+      const termCount = terminalManager?.list().length ?? 0;
+      writeMemDiag(`[MAIN] rss=${rss}MB heap=${heapUsed}/${heapTotal}MB external=${external}MB arrayBuf=${arrayBuffers}MB terminals=${termCount}`);
+    }, 30_000);
+  }
 
   // Analytics: track session start
   tracker?.track({

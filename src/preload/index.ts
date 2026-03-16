@@ -306,6 +306,10 @@ const api = {
   termDebugLog: (message: string) =>
     ipcRenderer.send(IPC_CHANNELS.TERMINAL.DEBUG_LOG, { message }),
 
+  // --- Memory diagnostic log (writes to ~/.muxvo/logs/mem-diag.log) ---
+  memDiagLog: (message: string) =>
+    ipcRenderer.send('mem-diag:renderer', { message }),
+
   // --- Utility: native file path from drag-and-drop ---
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
 };

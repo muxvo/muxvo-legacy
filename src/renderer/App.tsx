@@ -47,13 +47,13 @@ export function App(): JSX.Element {
   useEffect(() => {
     startRendererPerfLogger();
 
-    // 渲染进程内存诊断：每 30 秒打印 JS heap 大小
+    // 渲染进程内存诊断：每 30 秒写入 ~/.muxvo/logs/mem-diag.log（通过 IPC）
     const memDiagTimer = setInterval(() => {
       if ((performance as any).memory) {
         const mem = (performance as any).memory;
         const used = Math.round(mem.usedJSHeapSize / 1024 / 1024);
         const total = Math.round(mem.totalJSHeapSize / 1024 / 1024);
-        console.warn(`[MUXVO:renderer-mem] jsHeap=${used}/${total}MB`);
+        (window as any).api?.memDiagLog?.(`[RENDERER] jsHeap=${used}/${total}MB`);
       }
     }, 30_000);
 
