@@ -64,7 +64,7 @@ describe('VERIFY: Default terminal cwd', () => {
     vi.useRealTimers();
   });
 
-  test('spawn with non-HOME cwd injects cd && clear after 1.5s', async () => {
+  test('spawn with non-HOME cwd injects cd + clear on first PTY output', async () => {
     const mockProc = createMockPtyProcess();
     const mockPty = createMockPtyAdapter(mockProc);
 
@@ -79,18 +79,21 @@ describe('VERIFY: Default terminal cwd', () => {
     const result = manager.spawn({ cwd: customCwd });
     expect(result.success).toBe(true);
 
-    // Before timeout, no cd should be written
+    // Before shell output, no cd should be written
     const writtenBefore = mockProc.writtenData.filter(d => d.includes('cd '));
     expect(writtenBefore.length).toBe(0);
 
-    // Advance past the 1.5s timeout
-    vi.advanceTimersByTime(1600);
+    // Simulate first PTY output (shell prompt) to trigger shellInitDone
+    mockProc.dataCallback?.('$ ');
 
-    // After timeout, cd && clear should be injected
+    // Advance past the 100ms shellInitDone delay
+    vi.advanceTimersByTime(200);
+
+    // After shellInitDone, cd + clear should be injected (merged with bindkey)
     const writtenAfter = mockProc.writtenData.filter(d => d.includes('cd '));
     expect(writtenAfter.length).toBe(1);
     expect(writtenAfter[0]).toContain(customCwd);
-    expect(writtenAfter[0]).toContain('&& clear');
+    expect(writtenAfter[0]).toContain('clear');
 
     // Cleanup
     manager.closeAll();
@@ -107,10 +110,13 @@ describe('VERIFY: Default terminal cwd', () => {
     const result = manager.spawn({ cwd: homePath });
     expect(result.success).toBe(true);
 
-    // Advance past the 1.5s timeout
-    vi.advanceTimersByTime(2000);
+    // Simulate first PTY output to trigger shellInitDone
+    mockProc.dataCallback?.('$ ');
 
-    // No cd should be written for HOME
+    // Advance past the shellInitDone delay + safety timeout
+    vi.advanceTimersByTime(2500);
+
+    // No cd should be written for HOME (only bindkey + clear)
     const cdWrites = mockProc.writtenData.filter(d => d.includes('cd '));
     expect(cdWrites.length).toBe(0);
 

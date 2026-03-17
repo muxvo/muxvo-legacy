@@ -59,6 +59,8 @@ interface ManagedTerminal {
   spawnedAt: number;
   /** Whether shell init keybindings (Home/End) have been injected */
   shellInitDone?: boolean;
+  /** When true, PTY output is not pushed to renderer (used during silent cd injection) */
+  suppressingOutput?: boolean;
   /** graceful close 的 resolve 函数 */
   exitResolve?: (result: { success: boolean }) => void;
 }
@@ -177,18 +179,6 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
         startCwdPolling();
         debugLog(`[TERM:spawn] id=${id} pid=${proc.pid} cwd=${options.cwd}`);
 
-        // Login shell (--login) may reset cwd during init scripts (.zprofile/.zshrc).
-        // Force cd back to requested cwd after shell init completes.
-        const homePath = require('os').homedir();
-        if (options.cwd !== homePath) {
-          setTimeout(() => {
-            const t = terminals.get(id);
-            if (t && t.machine.state !== 'Stopped') {
-              proc.write(` cd ${options.cwd.replace(/ /g, '\\ ')} && clear\n`);
-            }
-          }, 1500);
-        }
-
         pushStateChange(id, machine.state);
 
         // Push terminal output to renderer
@@ -214,6 +204,52 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
             outputBuffers.set(id, updated.slice(start));
           } else {
             outputBuffers.set(id, updated);
+          }
+
+          // On first PTY output: schedule keybinding injection + silent cd for zsh.
+          // This ensures Cmd+Left/Right works regardless of vi/emacs mode,
+          // and silently cd to the requested cwd (login shell may override it).
+          {
+            const terminal = terminals.get(id);
+            if (terminal && !terminal.shellInitDone) {
+              terminal.shellInitDone = true;
+              const homePath = require('os').homedir();
+              setTimeout(() => {
+                const t = terminals.get(id);
+                if (!t || t.machine.state === 'Stopped') return;
+                // Suppress output to renderer so cd+clear is invisible to user
+                t.suppressingOutput = true;
+                const cdPart = options.cwd !== homePath
+                  ? ` cd ${options.cwd.replace(/ /g, '\\ ')};`
+                  : '';
+                proc.write(
+                  " bindkey '\\e[H' beginning-of-line 2>/dev/null;" +
+                  " bindkey '\\e[F' end-of-line 2>/dev/null;" +
+                  " bindkey -M vicmd '\\e[H' beginning-of-line 2>/dev/null;" +
+                  " bindkey -M vicmd '\\e[F' end-of-line 2>/dev/null;" +
+                  cdPart +
+                  " clear\r"
+                );
+                // Safety: auto-unsuppress after 2s
+                setTimeout(() => {
+                  const t2 = terminals.get(id);
+                  if (t2) t2.suppressingOutput = false;
+                }, 2000);
+              }, 100);
+            }
+          }
+
+          // During output suppression: still update outputBuffers but skip IPC push
+          // and state detection so the cd+clear injection is invisible to renderer.
+          {
+            const terminal = terminals.get(id);
+            if (terminal?.suppressingOutput) {
+              // Detect clear completion → stop suppressing
+              if (data.includes('\x1b[2J') || data.includes('\x1b[H\x1b[2J')) {
+                terminal.suppressingOutput = false;
+              }
+              return;
+            }
           }
 
           const prev = pendingIpcOutput.get(id) ?? '';
@@ -260,26 +296,6 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
                 machine.send('WAIT_INPUT');
                 pushStateChange(id, machine.state);
               }
-            }
-          }
-
-          // On first PTY output: schedule keybinding injection for zsh (all keymaps).
-          // This ensures Cmd+Left/Right works regardless of vi/emacs mode.
-          // We inject on first output (not WaitingInput) because WaitingInput only
-          // detects CC/interactive prompts, not regular shell prompts.
-          {
-            const terminal = terminals.get(id);
-            if (terminal && !terminal.shellInitDone) {
-              terminal.shellInitDone = true;
-              setTimeout(() => {
-                proc.write(
-                  " bindkey '\\e[H' beginning-of-line 2>/dev/null;" +
-                  " bindkey '\\e[F' end-of-line 2>/dev/null;" +
-                  " bindkey -M vicmd '\\e[H' beginning-of-line 2>/dev/null;" +
-                  " bindkey -M vicmd '\\e[F' end-of-line 2>/dev/null;" +
-                  " clear\r"
-                );
-              }, 100);
             }
           }
         });
