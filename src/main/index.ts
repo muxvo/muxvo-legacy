@@ -385,14 +385,8 @@ app.whenReady().then(() => {
         }
       }
     }
-    // Force cd to correct cwd after shell initialization completes
-    // Login shell (--login) may reset cwd during init scripts
-    const tm = terminalManager;
-    setTimeout(() => {
-      for (const { id, cwd } of spawnedIds) {
-        tm.write(id, ` cd ${cwd.replace(/ /g, '\\ ')} && clear\n`);
-      }
-    }, 1500);
+    // cd injection is now handled internally by terminal manager spawn()
+    // (merged with shellInitDone handler for silent execution)
     // Notify renderer to refresh terminal list
     const list = terminalManager.list();
     mainWindow.webContents.send(IPC_CHANNELS.TERMINAL.LIST_UPDATED, list.map((t) => ({
