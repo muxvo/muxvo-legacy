@@ -143,6 +143,12 @@ export function createWorktreeManager() {
             repoPath = mainRepo;
           }
         } catch { /* fallback to --show-toplevel result */ }
+        // Safety net: if repoPath still points inside .worktrees/, strip to main repo
+        const wtMarker = '/.worktrees/';
+        const wtIdx = repoPath.indexOf(wtMarker);
+        if (wtIdx >= 0) {
+          repoPath = repoPath.substring(0, wtIdx);
+        }
         let branch: string | undefined;
         try {
           branch = await git(path, ['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -214,6 +220,10 @@ export function createWorktreeManager() {
     async create(
       repoPath: string
     ): Promise<{ worktreePath: string; branch: string; warning?: { sizeMB: number; message: string } }> {
+      // Prevent nested worktree creation
+      if (repoPath.includes('/.worktrees/')) {
+        throw new Error(`Cannot create worktree inside another worktree: ${repoPath}`);
+      }
       // Pre-check repo size
       const { warning } = await this.preCheck(repoPath);
 
@@ -290,6 +300,12 @@ export function createWorktreeManager() {
         mainRepo = resolve(absGitDir, '..');
       } catch {
         mainRepo = repoPath;
+      }
+      // Safety net: if mainRepo still points inside .worktrees/, strip to main repo
+      const wtMarker = '/.worktrees/';
+      const wtIdx = mainRepo.indexOf(wtMarker);
+      if (wtIdx >= 0) {
+        mainRepo = mainRepo.substring(0, wtIdx);
       }
 
       // Get the branch name before removing
