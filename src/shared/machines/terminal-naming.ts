@@ -56,6 +56,10 @@ export function createNamingMachine(initialName?: string) {
           context.originalValue = context.displayText;
           context.editValue = context.displayText;
           state = 'Editing';
+        } else if (eventType === 'CLEAR') {
+          context.displayText = '';
+          context.originalValue = '';
+          state = 'DisplayEmpty';
         }
         break;
     }

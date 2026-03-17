@@ -126,6 +126,7 @@ export function TileHeader({
     inputValue,
     setInputValue,
     inputRef,
+    sendNaming,
     handlePlaceholderClick,
     handleNameClick,
     handleInputKeyDown,
@@ -135,6 +136,30 @@ export function TileHeader({
   // Worktree badge: detect from CWD path, fallback to custom name pattern
   const worktreeInfo = getWorktreeInfo(cwd)
     || getWorktreeInfoFromName(namingState === 'DisplayNamed' ? namingContext.displayText : undefined);
+
+  // Validate worktree registration: hide badge & clear name for orphaned worktree dirs
+  const [isValidWorktree, setIsValidWorktree] = useState(true);
+  useEffect(() => {
+    if (!cwd.includes('/.worktrees/')) {
+      setIsValidWorktree(true);
+      return;
+    }
+    let cancelled = false;
+    window.api.worktree.detectRepo(cwd).then((res: any) => {
+      if (cancelled || !res.success || !res.data?.repoPath) return;
+      window.api.worktree.list(res.data.repoPath).then((listRes: any) => {
+        if (cancelled || !listRes.success || !listRes.data) return;
+        const isRegistered = listRes.data.some((wt: any) =>
+          cwd === wt.path || cwd.startsWith(wt.path + '/')
+        );
+        if (!isRegistered) {
+          setIsValidWorktree(false);
+          sendNaming('CLEAR');
+        }
+      });
+    });
+    return () => { cancelled = true; };
+  }, [cwd, sendNaming]);
 
   // CwdPicker state
   const [cwdPickerOpen, setCwdPickerOpen] = useState(false);
@@ -214,8 +239,8 @@ export function TileHeader({
           }`}
         />
 
-        {/* Worktree project badge (green, only for worktree terminals) */}
-        {worktreeInfo && (
+        {/* Worktree project badge (green, only for valid registered worktrees) */}
+        {worktreeInfo && isValidWorktree && (
           <span className="tile-worktree-badge">
             <SmallBranchIcon />
             {worktreeInfo.projectName}
