@@ -237,10 +237,11 @@ export function WorktreePopover({
     top = anchorRect.top - popoverHeight - 8;
   }
 
-  // Find which worktree the current terminal is in
-  const currentWorktree = worktrees.find(
-    (wt) => terminalCwd === wt.path || terminalCwd.startsWith(wt.path + '/')
-  );
+  // Find which worktree the current terminal is in (longest path first to avoid
+  // main repo prefix matching all worktree paths under .worktrees/)
+  const currentWorktree = [...worktrees]
+    .sort((a, b) => b.path.length - a.path.length)
+    .find((wt) => terminalCwd === wt.path || terminalCwd.startsWith(wt.path + '/'));
 
   return createPortal(
     <div className="worktree-popover-overlay" onClick={onClose}>
