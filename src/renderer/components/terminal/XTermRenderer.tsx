@@ -15,6 +15,7 @@ import { shellEscapePaths } from '../../utils/shell-escape';
 import { stripPromptEolMark } from '@/shared/utils/strip-prompt-eol-mark';
 import { glyphLog } from '../../utils/glyph-logger';
 import { termLog } from '../../utils/term-debug-logger';
+import { ringPush, ringFlush, ringRemove } from '../../utils/scroll-event-ring';
 import { updateTerminalSizeCache } from '../../utils/terminal-size-cache';
 import '@xterm/xterm/css/xterm.css';
 
@@ -141,11 +142,16 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     const scrollDisposable = term.onScroll(() => {
       const vY = term.buffer.active.viewportY;
       const bY = term.buffer.active.baseY;
-      // Detect abnormal jump to top: viewportY drops from meaningful position to 0
-      // while buffer has content (baseY > 10). This catches browser scrollTop resets
-      // and other unexpected scroll corruption.
-      if (prevScrollViewportY > 5 && vY === 0 && bY > 10) {
-        termLog('scrollJump!', `id=${terminalId} prevViewportY=${prevScrollViewportY} → 0 baseY=${bY}`);
+      // Ring: always push (no IPC cost)
+      ringPush(terminalId, 'scroll', `vY=${vY} bY=${bY} prevVY=${prevScrollViewportY}`);
+      // Detect anomaly: large unexpected backward jump
+      const jumpDelta = prevScrollViewportY - vY;
+      const isJumpToTop = prevScrollViewportY > 5 && vY === 0 && bY > 10;
+      const isLargeJump = jumpDelta > 20 && bY > 10;
+      if (isJumpToTop || isLargeJump) {
+        termLog('scrollJump!', `id=${terminalId} prevVY=${prevScrollViewportY} → vY=${vY} bY=${bY} delta=${jumpDelta} toTop=${isJumpToTop}`);
+        // Flush ring to get full event trace leading up to the jump
+        ringFlush(terminalId, `scrollJump prevVY=${prevScrollViewportY}->vY=${vY}`);
       }
       prevScrollViewportY = vY;
       syncScrollDataAttrs();
@@ -160,6 +166,8 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     // Scroll restoration is deferred to next frame because xterm.js v6
     // processes buffer rewrap asynchronously after fit().
     let fitSeq = 0;
+    let lastObsWidth = 0;
+    let lastObsHeight = 0;
 
     /** Guarded fit: skip when container is too small to produce meaningful dimensions.
      *  ALL fit triggers should go through this single entry point. */
@@ -181,6 +189,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
 
       // Diagnostic: log scroll state BEFORE fit (critical for debugging scroll-to-top bug)
       termLog('scrollFit:before', `id=${terminalId} src=${source} seq=${seq} viewportY=${buf.viewportY} baseY=${buf.baseY} ratio=${scrollRatio.toFixed(3)} wasAtBottom=${wasAtBottom}`);
+      ringPush(terminalId, 'fit:before', `src=${source} seq=${seq} vY=${buf.viewportY} bY=${buf.baseY}`);
 
       // Hide content during reflow to prevent 1-frame flash of wrong scroll position.
       // visibility:hidden keeps element dimensions (unlike display:none) so fitAddon
@@ -193,6 +202,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       logFit(terminalId, source, containerRef.current, term.cols, term.rows,
         `${prevCols}x${prevRows}→${term.cols}x${term.rows}`);
       termLog('fit', `id=${terminalId} src=${source} prev=${prevCols}x${prevRows} now=${term.cols}x${term.rows} containerW=${Math.round(containerRef.current?.getBoundingClientRect().width ?? 0)} containerH=${Math.round(containerRef.current?.getBoundingClientRect().height ?? 0)}`);
+      ringPush(terminalId, 'fit:done', `src=${source} seq=${seq} ${prevCols}x${prevRows}->${term.cols}x${term.rows}`);
       if (RESIZE_DEBUG && prevCols > 20 && term.cols < prevCols / 2) {
         console.warn(`[XTERM:WARN] id=${terminalId.slice(0, 5)} cols DROPPED ${prevCols}→${term.cols} src=${source}`);
         console.trace();
@@ -203,7 +213,9 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       requestAnimationFrame(() => {
         if (disposed || seq !== fitSeq) {
           // Stale restore: a newer fit superseded this one. Log for diagnostics.
-          termLog('scrollFit:stale', `id=${terminalId} src=${source} seq=${seq} current=${fitSeq} → SKIP`);
+          const stack = new Error().stack?.split('\n').slice(1, 4).join(' | ') ?? '';
+          termLog('scrollFit:stale', `id=${terminalId} src=${source} seq=${seq} current=${fitSeq} stack=${stack} → SKIP`);
+          ringPush(terminalId, 'fit:stale', `src=${source} seq=${seq} cur=${fitSeq}`);
           // Ensure viewport visibility is restored even on stale skip
           if (viewport) viewport.style.visibility = '';
           return;
@@ -222,6 +234,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
         syncScrollDataAttrs();
         // Diagnostic: log scroll state AFTER restoration
         termLog('scrollFit:after', `id=${terminalId} src=${source} seq=${seq} viewportY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY} wasAtBottom=${wasAtBottom}`);
+        ringPush(terminalId, 'fit:restored', `src=${source} seq=${seq} vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY} wasBottom=${wasAtBottom}`);
         // Restore visibility after scroll position is correct
         if (viewport) viewport.style.visibility = '';
       });
@@ -371,9 +384,17 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry || disposed) return;
+      const { width, height } = entry.contentRect;
+      const buf = term.buffer.active;
+      // Ring: always push (no IPC cost)
+      ringPush(terminalId, 'resizeObs', `w=${Math.round(width)} h=${Math.round(height)} vY=${buf.viewportY} bY=${buf.baseY} suppress=${suppressResizeRef.current}`);
+      // File log only when container dimensions actually changed (dedup)
+      if (Math.abs(width - lastObsWidth) > 1 || Math.abs(height - lastObsHeight) > 1) {
+        termLog('resizeObs', `id=${terminalId} ${Math.round(lastObsWidth)}x${Math.round(lastObsHeight)}->${Math.round(width)}x${Math.round(height)} vY=${buf.viewportY} bY=${buf.baseY}`);
+        lastObsWidth = width;
+        lastObsHeight = height;
+      }
       if (RESIZE_DEBUG) {
-        const { width, height } = entry.contentRect;
-        const buf = term.buffer.active;
         console.log(`[XTERM:resizeObs] id=${terminalId.slice(0, 5)} w=${Math.round(width)} h=${Math.round(height)} viewportY=${buf.viewportY} baseY=${buf.baseY}`);
       }
       safeFit('resizeObs');
@@ -406,6 +427,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
 
     // Refit after global zoom changes (webFrame.setZoomFactor alters viewport dimensions)
     const onGlobalZoom = () => {
+      ringPush(terminalId, 'globalZoom', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY}`);
       requestAnimationFrame(() => { if (!disposed) safeFit('globalZoom'); });
     };
     window.addEventListener('muxvo:global-zoom', onGlobalZoom);
@@ -452,6 +474,14 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     };
     window.addEventListener('muxvo:terminal-scroll', onTerminalScrollReq);
 
+    // Track clicks for scroll-jump diagnostics (ring only, no IPC)
+    const containerEl = containerRef.current;
+    const onContainerMouseDown = () => {
+      const buf = term.buffer.active;
+      ringPush(terminalId, 'mousedown', `vY=${buf.viewportY} bY=${buf.baseY}`);
+    };
+    containerEl.addEventListener('mousedown', onContainerMouseDown);
+
     // Pause cursor blink when window loses focus to reduce idle CPU usage.
     // WebGL renderer's rAF loop runs continuously when cursorBlink is true,
     // even when the window is behind other windows. Pausing the blink
@@ -489,6 +519,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       clearTimeout(safetyTimer);
       unsubOutput();
       observer.disconnect();
+      containerEl?.removeEventListener('mousedown', onContainerMouseDown);
       window.removeEventListener('muxvo:theme-change', onThemeChange);
       window.removeEventListener('muxvo:global-zoom', onGlobalZoom);
       window.removeEventListener('muxvo:terminal-refit', onRefit);
@@ -501,6 +532,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       writeDisposable.dispose();
       addonManager.disposeAll();
       term.dispose();
+      ringRemove(terminalId);
     };
   }, [terminalId]);
 

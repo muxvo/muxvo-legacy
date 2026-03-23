@@ -11,11 +11,17 @@
  * Visual impact: none (0.01% = ~0.2px on 1920px screen, single frame)
  */
 import { glyphLog } from './glyph-logger';
+import { termLog } from './term-debug-logger';
+import { ringPush, getAllRingTerminalIds } from './scroll-event-ring';
 
 export function forceCompositorFlush(reason: string = 'unknown'): void {
   try {
     const current = window.api.app.getZoomFactor();
     glyphLog('flush', `reason=${reason} zoom=${current.toFixed(4)}`);
+    termLog('compositorFlush', `reason=${reason} zoom=${current.toFixed(4)}`);
+    for (const id of getAllRingTerminalIds()) {
+      ringPush(id, 'compositorFlush', `reason=${reason}`);
+    }
     window.api.app.setZoomFactor(current + 0.0001);
     requestAnimationFrame(() => {
       window.api.app.setZoomFactor(current);

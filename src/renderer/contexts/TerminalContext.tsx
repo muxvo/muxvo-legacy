@@ -194,6 +194,7 @@ export function TerminalProvider({ children }: { children: ReactNode }): JSX.Ele
           state: info.state,
           cwd: info.cwd || '/',
         }));
+        termLog('setTerminals', `source=mount count=${entries.length} ids=${entries.map((e: { id: string }) => e.id.slice(0, 5)).join(',')}`);
         dispatch({ type: 'SET_TERMINALS', entries });
         // Restore custom names from main process
         for (const info of result.data) {
@@ -222,6 +223,7 @@ export function TerminalProvider({ children }: { children: ReactNode }): JSX.Ele
         cwd: info.cwd || '/',
         sessionId: info.sessionId,
       }));
+      termLog('setTerminals', `source=listUpdated count=${entries.length} ids=${entries.map((e: { id: string }) => e.id.slice(0, 5)).join(',')}`);
       dispatch({ type: 'SET_TERMINALS', entries });
       // Restore custom names from main process
       for (const info of list) {
