@@ -1,20 +1,21 @@
 /**
- * Force Chromium compositor to invalidate cached texture layers.
- * Briefly promotes <html> to its own compositing layer via translateZ(0),
- * then removes it — forcing all child layers to be recreated.
+ * Force Chromium to re-rasterize all text by micro-toggling zoom factor.
  *
- * This is the programmatic equivalent of what happens when user:
- * - Takes a screenshot (macOS forces GPU readback)
- * - Switches views (compositing layers destroyed and recreated)
+ * Changing webFrame.setZoomFactor() alters the effective rendering DPI,
+ * which invalidates Chromium's glyph texture cache and forces fresh
+ * rasterization of all text content (both DOM and WebGL).
  *
- * Visual impact: none (translateZ(0) is a zero-offset, double-RAF ~32ms)
+ * This is the programmatic equivalent of what happens when user switches
+ * views (layout change → tile discard → fresh rasterization).
+ *
+ * Visual impact: none (0.01% = ~0.2px on 1920px screen, single frame)
  */
 export function forceCompositorFlush(): void {
-  const el = document.documentElement;
-  el.style.transform = 'translateZ(0)';
-  requestAnimationFrame(() => {
+  try {
+    const current = window.api.app.getZoomFactor();
+    window.api.app.setZoomFactor(current + 0.0001);
     requestAnimationFrame(() => {
-      el.style.transform = '';
+      window.api.app.setZoomFactor(current);
     });
-  });
+  } catch { /* preload not ready */ }
 }
