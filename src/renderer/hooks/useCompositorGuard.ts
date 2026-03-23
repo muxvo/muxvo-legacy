@@ -20,14 +20,14 @@ export function useCompositorGuard(panelState: PanelState): void {
   // 1. Periodic flush (30s interval, only when app is visible)
   useEffect(() => {
     const id = setInterval(() => {
-      if (!document.hidden) forceCompositorFlush();
+      if (!document.hidden) forceCompositorFlush('timer:30s');
     }, 30_000);
     return () => clearInterval(id);
   }, []);
 
   // 2. Flush on window focus (returning from other apps)
   useEffect(() => {
-    const onFocus = (): void => forceCompositorFlush();
+    const onFocus = (): void => forceCompositorFlush('windowFocus');
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, []);
@@ -43,7 +43,7 @@ export function useCompositorGuard(panelState: PanelState): void {
       panelState.pluginsPanel.open ||
       panelState.tempView.active;
     if (prevOverlayRef.current && !hasOverlay) {
-      forceCompositorFlush();
+      forceCompositorFlush('panelClose');
     }
     prevOverlayRef.current = hasOverlay;
   }, [panelState]);

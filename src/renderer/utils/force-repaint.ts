@@ -10,9 +10,12 @@
  *
  * Visual impact: none (0.01% = ~0.2px on 1920px screen, single frame)
  */
-export function forceCompositorFlush(): void {
+import { glyphLog } from './glyph-logger';
+
+export function forceCompositorFlush(reason: string = 'unknown'): void {
   try {
     const current = window.api.app.getZoomFactor();
+    glyphLog('flush', `reason=${reason} zoom=${current.toFixed(4)}`);
     window.api.app.setZoomFactor(current + 0.0001);
     requestAnimationFrame(() => {
       window.api.app.setZoomFactor(current);
