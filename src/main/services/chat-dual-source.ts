@@ -276,6 +276,9 @@ export function createChatProjectReader(opts: ChatProjectReaderOpts) {
             trimmedContent.startsWith('<command-name>')
           ) {
             resolvedType = 'system';
+          } else if (/^(cd\s+|bindkey\s)/.test(trimmedContent)) {
+            // Filter out Muxvo-injected shell commands (cd+clear, cd+resume, bindkey, etc.)
+            resolvedType = 'system';
           } else if (trimmedContent.startsWith('<teammate-message')) {
             // Split concatenated teammate blocks into individual messages
             const baseFields = {
