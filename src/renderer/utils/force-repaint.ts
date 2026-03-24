@@ -16,6 +16,7 @@ import { glyphLog } from './glyph-logger';
 import { termLog } from './term-debug-logger';
 import { ringPush, getAllRingTerminalIds } from './scroll-event-ring';
 import { getActiveWebglCount } from './terminal-addon-manager';
+import { checkGlyphIntegrity } from './glyph-integrity-check';
 
 const appStartTime = Date.now();
 
@@ -26,7 +27,8 @@ export function forceCompositorFlush(reason: string = 'unknown'): void {
     const webglCount = getActiveWebglCount();
     const hidden = document.hidden;
 
-    glyphLog('flush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount} hidden=${hidden}`);
+    const integrity = checkGlyphIntegrity();
+    glyphLog('flush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount} hidden=${hidden} integrity=${integrity.ok ? 'OK' : 'FAIL'} ${integrity.detail}`);
     termLog('compositorFlush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount}`);
     for (const id of getAllRingTerminalIds()) {
       ringPush(id, 'compositorFlush', `reason=${reason}`);

@@ -14,9 +14,15 @@
 
 import { useEffect, useRef } from 'react';
 import { forceCompositorFlush } from '../utils/force-repaint';
+import { initGlyphIntegrityCheck } from '../utils/glyph-integrity-check';
 import type { PanelState } from '../contexts/PanelContext';
 
 export function useCompositorGuard(panelState: PanelState): void {
+  // 0. Initialize glyph integrity check (captures reference hash at startup)
+  useEffect(() => {
+    initGlyphIntegrityCheck();
+  }, []);
+
   // 1. Periodic flush (30s interval, only when app is visible)
   useEffect(() => {
     const id = setInterval(() => {
