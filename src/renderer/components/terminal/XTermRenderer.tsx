@@ -361,39 +361,66 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     window.api.terminal.getBuffer(terminalId).then((result: { success: boolean; data?: string }) => {
       if (disposed) return; // Component unmounted — discard
       termLog('bufReplay', `id=${terminalId} bufBytes=${result?.data?.length ?? 0} success=${result?.success}`);
+
+      // Collect all data to write: buffer replay + pending live data
+      const chunks: string[] = [];
       if (result?.success && result.data) {
-        term.write(stripPromptEolMark(result.data));
+        chunks.push(stripPromptEolMark(result.data));
       }
-      // Flush any live data that arrived during getBuffer round-trip
       const flushedCount = pendingLiveData.length;
       for (const data of pendingLiveData) {
         if (disposed) break;
-        term.write(data);
+        chunks.push(data);
       }
       pendingLiveData.length = 0;
-      bufferedDataWritten = true;
 
-      // Buffer replay complete — reveal terminal
-      if (containerRef.current) {
-        containerRef.current.style.opacity = '1';
-      }
-      {
-        const rect = containerRef.current?.getBoundingClientRect();
-        termLog('reveal', `id=${terminalId} flushed=${flushedCount} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
-      }
+      // Helper: called after ALL writes are parsed by xterm (baseY is accurate)
+      const onAllWritesParsed = (): void => {
+        if (disposed) return;
+        bufferedDataWritten = true;
 
-      // buffer 写入完成后重新 fit + scrollToBottom，确保列宽与内容匹配且 viewport 显示最新内容
-      requestAnimationFrame(() => {
-        if (!disposed) {
-          safeFit('bufferReplay');
-          const beforeVY = term.buffer.active.viewportY;
-          term.scrollToBottom();
-          termLog('bufScrollBottom', `id=${terminalId} beforeVY=${beforeVY} afterVY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY}`);
+        // Reveal terminal AFTER data is parsed (prevents flash of empty/top content)
+        if (containerRef.current) {
+          containerRef.current.style.opacity = '1';
         }
-      });
+        {
+          const rect = containerRef.current?.getBoundingClientRect();
+          termLog('reveal', `id=${terminalId} flushed=${flushedCount} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
+        }
+
+        // Now baseY is the real value — scrollToBottom will work correctly
+        requestAnimationFrame(() => {
+          if (!disposed) {
+            safeFit('bufferReplay');
+            const beforeVY = term.buffer.active.viewportY;
+            term.scrollToBottom();
+            termLog('bufScrollBottom', `id=${terminalId} beforeVY=${beforeVY} afterVY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY}`);
+          }
+        });
+      };
+
+      if (chunks.length === 0) {
+        // No data to write — reveal immediately
+        onAllWritesParsed();
+      } else {
+        // Write all chunks. Use callback on the LAST write to know when xterm
+        // has finished parsing all data. term.write() is async in xterm.js v6 —
+        // without the callback, scrollToBottom() runs before baseY is updated.
+        let writesRemaining = chunks.length;
+        for (const chunk of chunks) {
+          if (disposed) break;
+          term.write(chunk, () => {
+            writesRemaining--;
+            if (writesRemaining === 0) {
+              onAllWritesParsed();
+            }
+          });
+        }
+      }
 
       // Self-verification: warn if terminal may still be blank
-      if (term.buffer.active.length <= 1) {
+      // (checked synchronously — actual data arrives async via write callbacks)
+      if (chunks.length === 0 && term.buffer.active.length <= 1) {
         console.warn(`[MUXVO:restore] WARNING: terminal ${terminalId} may still be blank after buffer replay`);
       }
     });
