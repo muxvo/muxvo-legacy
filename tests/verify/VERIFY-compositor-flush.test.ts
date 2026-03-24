@@ -1,34 +1,35 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 /**
- * VERIFY: forceCompositorFlush 微缩放机制
+ * VERIFY: forceCompositorFlush CSS transform 机制
  *
  * 验证文字乱码修复的 workaround 机制是否正确工作：
- * 1. 调用 setZoomFactor(current + 0.0001) 触发重新光栅化
- * 2. 在 RAF 回调中恢复原始 zoom factor
+ * 1. 设置 document.documentElement.style.transform = 'translateZ(0)'
+ * 2. 在 RAF 回调中移除 transform
  * 3. 通过 glyphLog 记录触发原因
- * 4. preload 不可用时静默失败（不抛异常）
+ * 4. 不使用 setZoomFactor（避免触发 ResizeObserver 导致滚动跳顶）
  */
 
 // Mock window.api + requestAnimationFrame before importing module
-const mockSetZoomFactor = vi.fn();
-const mockGetZoomFactor = vi.fn(() => 1.0);
 const mockGlyphLog = vi.fn();
+const mockTermLog = vi.fn();
 let rafCallbacks: Array<() => void> = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
   rafCallbacks = [];
-  mockGetZoomFactor.mockReturnValue(1.0);
+
+  // Mock document.documentElement
+  const mockStyle = { transform: '' };
+  (globalThis as any).document = {
+    documentElement: { style: mockStyle },
+  };
 
   (globalThis as any).window = {
     api: {
-      app: {
-        getZoomFactor: mockGetZoomFactor,
-        setZoomFactor: mockSetZoomFactor,
-      },
       glyphLog: mockGlyphLog,
+      termDebugLog: mockTermLog,
     },
   };
   (globalThis as any).requestAnimationFrame = (cb: () => void) => {
@@ -38,39 +39,38 @@ beforeEach(() => {
 });
 
 describe('forceCompositorFlush', () => {
-  test('applies micro-zoom offset (+0.0001) immediately', async () => {
+  test('applies translateZ(0) transform immediately', async () => {
     const { forceCompositorFlush } = await import('@/renderer/utils/force-repaint');
     forceCompositorFlush('test');
 
-    // First call: micro-zoom
-    expect(mockSetZoomFactor).toHaveBeenCalledTimes(1);
-    expect(mockSetZoomFactor).toHaveBeenCalledWith(1.0001);
+    expect(document.documentElement.style.transform).toBe('translateZ(0)');
   });
 
-  test('restores original zoom factor in RAF callback', async () => {
+  test('removes transform in RAF callback', async () => {
     const { forceCompositorFlush } = await import('@/renderer/utils/force-repaint');
     forceCompositorFlush('test');
 
-    // Before RAF: only micro-zoom applied
-    expect(mockSetZoomFactor).toHaveBeenCalledTimes(1);
+    expect(document.documentElement.style.transform).toBe('translateZ(0)');
 
     // Fire RAF
     rafCallbacks.forEach((cb) => cb());
 
-    // After RAF: original zoom restored
-    expect(mockSetZoomFactor).toHaveBeenCalledTimes(2);
-    expect(mockSetZoomFactor).toHaveBeenLastCalledWith(1.0);
+    expect(document.documentElement.style.transform).toBe('');
   });
 
-  test('works with non-default zoom (e.g. user set 120%)', async () => {
-    mockGetZoomFactor.mockReturnValue(1.2);
+  test('does NOT use setZoomFactor (scroll-safe)', async () => {
+    // Ensure no setZoomFactor is called — it causes terminal scroll-to-top bugs
+    const mockSetZoomFactor = vi.fn();
+    (globalThis as any).window.api.app = {
+      getZoomFactor: vi.fn(() => 1.0),
+      setZoomFactor: mockSetZoomFactor,
+    };
+
     const { forceCompositorFlush } = await import('@/renderer/utils/force-repaint');
     forceCompositorFlush('test');
-
-    expect(mockSetZoomFactor).toHaveBeenCalledWith(1.2 + 0.0001);
-
     rafCallbacks.forEach((cb) => cb());
-    expect(mockSetZoomFactor).toHaveBeenLastCalledWith(1.2);
+
+    expect(mockSetZoomFactor).not.toHaveBeenCalled();
   });
 
   test('logs reason via glyphLog', async () => {
@@ -80,27 +80,14 @@ describe('forceCompositorFlush', () => {
     expect(mockGlyphLog).toHaveBeenCalledTimes(1);
     const logLine = mockGlyphLog.mock.calls[0][0] as string;
     expect(logLine).toContain('reason=timer:30s');
-    expect(logLine).toContain('zoom=1.0000');
   });
 
-  test('logs correct zoom value when zoomed', async () => {
-    mockGetZoomFactor.mockReturnValue(1.2);
-    const { forceCompositorFlush } = await import('@/renderer/utils/force-repaint');
-    forceCompositorFlush('windowFocus');
-
-    const logLine = mockGlyphLog.mock.calls[0][0] as string;
-    expect(logLine).toContain('reason=windowFocus');
-    expect(logLine).toContain('zoom=1.2000');
-  });
-
-  test('does not throw when preload not ready', async () => {
-    mockGetZoomFactor.mockImplementation(() => {
-      throw new Error('preload not ready');
-    });
+  test('does not throw when DOM not ready', async () => {
+    // Simulate missing documentElement
+    (globalThis as any).document = {};
     const { forceCompositorFlush } = await import('@/renderer/utils/force-repaint');
 
     expect(() => forceCompositorFlush('test')).not.toThrow();
-    expect(mockSetZoomFactor).not.toHaveBeenCalled();
   });
 
   test('default reason is "unknown"', async () => {

@@ -139,19 +139,24 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     }
     // Track previous viewportY to detect abnormal scroll-to-top events
     let prevScrollViewportY = 0;
+    // Flag: suppress scrollJump detection during fitPreservingScroll restoration
+    // (scrollToBottom + scrollLines intermediate steps are not real jumps)
+    let inScrollRestore = false;
     const scrollDisposable = term.onScroll(() => {
       const vY = term.buffer.active.viewportY;
       const bY = term.buffer.active.baseY;
       // Ring: always push (no IPC cost)
       ringPush(terminalId, 'scroll', `vY=${vY} bY=${bY} prevVY=${prevScrollViewportY}`);
-      // Detect anomaly: large unexpected backward jump
-      const jumpDelta = prevScrollViewportY - vY;
-      const isJumpToTop = prevScrollViewportY > 5 && vY === 0 && bY > 10;
-      const isLargeJump = jumpDelta > 20 && bY > 10;
-      if (isJumpToTop || isLargeJump) {
-        termLog('scrollJump!', `id=${terminalId} prevVY=${prevScrollViewportY} → vY=${vY} bY=${bY} delta=${jumpDelta} toTop=${isJumpToTop}`);
-        // Flush ring to get full event trace leading up to the jump
-        ringFlush(terminalId, `scrollJump prevVY=${prevScrollViewportY}->vY=${vY}`);
+      // Detect anomaly: large unexpected backward jump (skip during scroll restore)
+      if (!inScrollRestore) {
+        const jumpDelta = prevScrollViewportY - vY;
+        const isJumpToTop = prevScrollViewportY > 5 && vY === 0 && bY > 10;
+        const isLargeJump = jumpDelta > 20 && bY > 10;
+        if (isJumpToTop || isLargeJump) {
+          termLog('scrollJump!', `id=${terminalId} prevVY=${prevScrollViewportY} → vY=${vY} bY=${bY} delta=${jumpDelta} toTop=${isJumpToTop}`);
+          // Flush ring to get full event trace leading up to the jump
+          ringFlush(terminalId, `scrollJump prevVY=${prevScrollViewportY}->vY=${vY}`);
+        }
       }
       prevScrollViewportY = vY;
       syncScrollDataAttrs();
@@ -220,6 +225,9 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
           if (viewport) viewport.style.visibility = '';
           return;
         }
+        // Suppress scrollJump detection during restoration (intermediate
+        // scrollToBottom + scrollLines steps are not real jumps)
+        inScrollRestore = true;
         if (wasAtBottom) {
           term.scrollToBottom();
         } else {
@@ -231,6 +239,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
             term.scrollLines(-newOffset);
           }
         }
+        inScrollRestore = false;
         syncScrollDataAttrs();
         // Diagnostic: log scroll state AFTER restoration
         termLog('scrollFit:after', `id=${terminalId} src=${source} seq=${seq} viewportY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY} wasAtBottom=${wasAtBottom}`);
