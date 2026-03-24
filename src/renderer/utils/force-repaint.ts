@@ -30,12 +30,12 @@ export function forceCompositorFlush(reason: string = 'unknown'): void {
     const integrity = checkGlyphIntegrity();
     glyphLog('flush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount} hidden=${hidden} integrity=${integrity.ok ? 'OK' : 'FAIL'} ${integrity.detail}`);
     termLog('compositorFlush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount}`);
-    for (const id of getAllRingTerminalIds()) {
-      ringPush(id, 'compositorFlush', `reason=${reason}`);
-    }
+    // Notify XTermRenderer instances to snapshot scroll state before/after flush
+    window.dispatchEvent(new CustomEvent('muxvo:compositor-flush-pre', { detail: reason }));
     const el = document.documentElement;
     el.style.transform = 'translateZ(0)';
     requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('muxvo:compositor-flush-post', { detail: reason }));
       el.style.transform = '';
     });
   } catch { /* preload not ready */ }

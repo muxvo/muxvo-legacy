@@ -139,28 +139,57 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     }
     // Track previous viewportY to detect abnormal scroll-to-top events
     let prevScrollViewportY = 0;
-    // Flag: suppress scrollJump detection during fitPreservingScroll restoration
-    // (scrollToBottom + scrollLines intermediate steps are not real jumps)
-    let inScrollRestore = false;
     const scrollDisposable = term.onScroll(() => {
       const vY = term.buffer.active.viewportY;
-      const bY = term.buffer.active.baseY;
-      // Ring: always push (no IPC cost)
-      ringPush(terminalId, 'scroll', `vY=${vY} bY=${bY} prevVY=${prevScrollViewportY}`);
-      // Detect anomaly: large unexpected backward jump (skip during scroll restore)
-      if (!inScrollRestore) {
-        const jumpDelta = prevScrollViewportY - vY;
-        const isJumpToTop = prevScrollViewportY > 5 && vY === 0 && bY > 10;
-        const isLargeJump = jumpDelta > 20 && bY > 10;
-        if (isJumpToTop || isLargeJump) {
-          termLog('scrollJump!', `id=${terminalId} prevVY=${prevScrollViewportY} → vY=${vY} bY=${bY} delta=${jumpDelta} toTop=${isJumpToTop}`);
-          // Flush ring to get full event trace leading up to the jump
-          ringFlush(terminalId, `scrollJump prevVY=${prevScrollViewportY}->vY=${vY}`);
-        }
-      }
       prevScrollViewportY = vY;
       syncScrollDataAttrs();
     });
+
+    // Helper: read DOM-level scrollTop from .xterm-viewport element
+    function getDomScrollState(): { domST: number; domSH: number } {
+      const vp = containerRef.current?.querySelector('.xterm-viewport') as HTMLElement | null;
+      return { domST: vp ? Math.round(vp.scrollTop) : -1, domSH: vp ? Math.round(vp.scrollHeight) : -1 };
+    }
+
+    // onRender jump detection — fires on every xterm render frame.
+    // More reliable than onScroll for catching DOM-level scrollTop resets.
+    let renderPrevVY = 0;
+    const renderDisposable = term.onRender(() => {
+      const vY = term.buffer.active.viewportY;
+      const bY = term.buffer.active.baseY;
+      if (renderPrevVY > 5 && vY === 0 && bY > 10) {
+        const { domST, domSH } = getDomScrollState();
+        termLog('render:jump!', `id=${terminalId} renderPrevVY=${renderPrevVY} → vY=0 bY=${bY} domST=${domST} domSH=${domSH}`);
+        ringFlush(terminalId, `renderJump ${renderPrevVY}->0`);
+      }
+      renderPrevVY = vY;
+    });
+
+    // Poll-based scroll jump detection (500ms interval).
+    // onScroll misses DOM-level scrollTop resets (CSS relayout, compositing layer changes).
+    // Polling viewportY + DOM scrollTop catches ALL jump sources.
+    let pollPrevVY = 0;
+    const scrollPollTimer = setInterval(() => {
+      if (disposed) return;
+      const vY = term.buffer.active.viewportY;
+      const bY = term.buffer.active.baseY;
+      const { domST, domSH } = getDomScrollState();
+      const delta = pollPrevVY - vY;
+
+      // Detect jump to top or large backward jump
+      if ((pollPrevVY > 5 && vY === 0 && bY > 10) || (delta > 50 && bY > 10)) {
+        termLog('scrollPoll:jump!', `id=${terminalId} pollPrevVY=${pollPrevVY} → vY=${vY} bY=${bY} delta=${delta} domST=${domST} domSH=${domSH}`);
+        ringFlush(terminalId, `pollJump ${pollPrevVY}->${vY}`);
+      }
+
+      // Detect DOM vs xterm mismatch (scrollTop=0 but viewportY>0)
+      if (vY > 10 && domST === 0 && domSH > 100) {
+        termLog('scrollPoll:domMismatch!', `id=${terminalId} vY=${vY} bY=${bY} domST=0 domSH=${domSH}`);
+        ringFlush(terminalId, `domMismatch vY=${vY} domST=0`);
+      }
+
+      pollPrevVY = vY;
+    }, 500);
     // Also sync after any write (covers initial buffer replay)
     const writeDisposable = term.onWriteParsed(() => syncScrollDataAttrs());
 
@@ -213,6 +242,17 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
         console.trace();
       }
 
+      // No-op fit: dimensions unchanged → skip scroll restoration entirely.
+      // This prevents compositorFlush and other no-resize triggers from
+      // unnecessarily executing scrollToBottom + scrollLines, which can
+      // perpetuate a corrupted vY=0 state.
+      if (term.cols === prevCols && term.rows === prevRows) {
+        if (viewport) viewport.style.visibility = '';
+        termLog('scrollFit:noop', `id=${terminalId} src=${source} seq=${seq} ${prevCols}x${prevRows} → no change`);
+        ringPush(terminalId, 'fit:noop', `src=${source} seq=${seq}`);
+        return;
+      }
+
       // Defer scroll restoration to next frame — xterm needs a tick to
       // complete buffer rewrap and update baseY/viewportY after fit().
       requestAnimationFrame(() => {
@@ -225,9 +265,6 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
           if (viewport) viewport.style.visibility = '';
           return;
         }
-        // Suppress scrollJump detection during restoration (intermediate
-        // scrollToBottom + scrollLines steps are not real jumps)
-        inScrollRestore = true;
         if (wasAtBottom) {
           term.scrollToBottom();
         } else {
@@ -239,7 +276,6 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
             term.scrollLines(-newOffset);
           }
         }
-        inScrollRestore = false;
         syncScrollDataAttrs();
         // Diagnostic: log scroll state AFTER restoration
         termLog('scrollFit:after', `id=${terminalId} src=${source} seq=${seq} viewportY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY} wasAtBottom=${wasAtBottom}`);
@@ -326,6 +362,9 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     let bufferedDataWritten = false;
     const pendingLiveData: string[] = [];
 
+    // Detect escape sequences that may cause viewport scroll changes
+    const SCROLL_DANGER_RE = /\x1b\[\??(?:1049[hl]|H|2J|1;1H)/;
+
     const unsubOutput = window.api.terminal.onOutput((event) => {
       if (event.id === terminalId) {
         trackRenderer('ipcOutput');
@@ -335,11 +374,18 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
           termLog('output', `id=${terminalId} bytes=${event.data.length} buffered=true queueLen=${pendingLiveData.length}`);
         } else {
           trackRenderer('termWrite');
+          // Detect escape sequences that may reset viewport (cursor home, clear, alt buffer)
+          if (SCROLL_DANGER_RE.test(event.data)) {
+            const vY = term.buffer.active.viewportY;
+            const escaped = event.data.slice(0, 80).replace(/[\x00-\x1f]/g, (c: string) => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+            termLog('write:dangerSeq', `id=${terminalId} vY=${vY} bY=${term.buffer.active.baseY} seq=${escaped}`);
+            ringPush(terminalId, 'write:danger', `vY=${vY} bytes=${event.data.length}`);
+          }
           term.write(event.data);
-          // Sampled log (2%) for live output
-          if (Math.random() < 0.02) {
+          // Sampled log (10%) for live output — increased from 2% for scroll debugging
+          if (Math.random() < 0.1) {
             const rect = containerRef.current?.getBoundingClientRect();
-            termLog('write', `id=${terminalId} bytes=${event.data.length} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
+            termLog('write', `id=${terminalId} bytes=${event.data.length} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
           }
         }
       }
@@ -349,39 +395,66 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     window.api.terminal.getBuffer(terminalId).then((result: { success: boolean; data?: string }) => {
       if (disposed) return; // Component unmounted — discard
       termLog('bufReplay', `id=${terminalId} bufBytes=${result?.data?.length ?? 0} success=${result?.success}`);
+
+      // Collect all data to write: buffer replay + pending live data
+      const chunks: string[] = [];
       if (result?.success && result.data) {
-        term.write(stripPromptEolMark(result.data));
+        chunks.push(stripPromptEolMark(result.data));
       }
-      // Flush any live data that arrived during getBuffer round-trip
       const flushedCount = pendingLiveData.length;
       for (const data of pendingLiveData) {
         if (disposed) break;
-        term.write(data);
+        chunks.push(data);
       }
       pendingLiveData.length = 0;
-      bufferedDataWritten = true;
 
-      // Buffer replay complete — reveal terminal
-      if (containerRef.current) {
-        containerRef.current.style.opacity = '1';
-      }
-      {
-        const rect = containerRef.current?.getBoundingClientRect();
-        termLog('reveal', `id=${terminalId} flushed=${flushedCount} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
-      }
+      // Helper: called after ALL writes are parsed by xterm (baseY is accurate)
+      const onAllWritesParsed = (): void => {
+        if (disposed) return;
+        bufferedDataWritten = true;
 
-      // buffer 写入完成后重新 fit + scrollToBottom，确保列宽与内容匹配且 viewport 显示最新内容
-      requestAnimationFrame(() => {
-        if (!disposed) {
-          safeFit('bufferReplay');
-          const beforeVY = term.buffer.active.viewportY;
-          term.scrollToBottom();
-          termLog('bufScrollBottom', `id=${terminalId} beforeVY=${beforeVY} afterVY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY}`);
+        // Reveal terminal AFTER data is parsed (prevents flash of empty/top content)
+        if (containerRef.current) {
+          containerRef.current.style.opacity = '1';
         }
-      });
+        {
+          const rect = containerRef.current?.getBoundingClientRect();
+          termLog('reveal', `id=${terminalId} flushed=${flushedCount} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
+        }
+
+        // Now baseY is the real value — scrollToBottom will work correctly
+        requestAnimationFrame(() => {
+          if (!disposed) {
+            safeFit('bufferReplay');
+            const beforeVY = term.buffer.active.viewportY;
+            term.scrollToBottom();
+            termLog('bufScrollBottom', `id=${terminalId} beforeVY=${beforeVY} afterVY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY}`);
+          }
+        });
+      };
+
+      if (chunks.length === 0) {
+        // No data to write — reveal immediately
+        onAllWritesParsed();
+      } else {
+        // Write all chunks. Use callback on the LAST write to know when xterm
+        // has finished parsing all data. term.write() is async in xterm.js v6 —
+        // without the callback, scrollToBottom() runs before baseY is updated.
+        let writesRemaining = chunks.length;
+        for (const chunk of chunks) {
+          if (disposed) break;
+          term.write(chunk, () => {
+            writesRemaining--;
+            if (writesRemaining === 0) {
+              onAllWritesParsed();
+            }
+          });
+        }
+      }
 
       // Self-verification: warn if terminal may still be blank
-      if (term.buffer.active.length <= 1) {
+      // (checked synchronously — actual data arrives async via write callbacks)
+      if (chunks.length === 0 && term.buffer.active.length <= 1) {
         console.warn(`[MUXVO:restore] WARNING: terminal ${terminalId} may still be blank after buffer replay`);
       }
     });
@@ -491,6 +564,30 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     };
     containerEl.addEventListener('mousedown', onContainerMouseDown);
 
+    // Track terminal container focus/blur (may correlate with scroll jumps)
+    const onContainerFocus = () => {
+      ringPush(terminalId, 'focus', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY}`);
+    };
+    const onContainerBlur = () => {
+      ringPush(terminalId, 'blur', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY}`);
+    };
+    containerEl.addEventListener('focus', onContainerFocus, true);
+    containerEl.addEventListener('blur', onContainerBlur, true);
+
+    // Compositor flush scroll snapshots — record vY/bY/domScrollTop before and after flush
+    const onFlushPre = () => {
+      if (disposed) return;
+      const { domST } = getDomScrollState();
+      ringPush(terminalId, 'flush:pre', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY} domST=${domST}`);
+    };
+    const onFlushPost = () => {
+      if (disposed) return;
+      const { domST } = getDomScrollState();
+      ringPush(terminalId, 'flush:post', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY} domST=${domST}`);
+    };
+    window.addEventListener('muxvo:compositor-flush-pre', onFlushPre);
+    window.addEventListener('muxvo:compositor-flush-post', onFlushPost);
+
     // Pause cursor blink when window loses focus to reduce idle CPU usage.
     // WebGL renderer's rAF loop runs continuously when cursorBlink is true,
     // even when the window is behind other windows. Pausing the blink
@@ -526,9 +623,14 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       termLog('unmount', `id=${terminalId}`);
       disposed = true;
       clearTimeout(safetyTimer);
+      clearInterval(scrollPollTimer);
       unsubOutput();
       observer.disconnect();
       containerEl?.removeEventListener('mousedown', onContainerMouseDown);
+      containerEl?.removeEventListener('focus', onContainerFocus, true);
+      containerEl?.removeEventListener('blur', onContainerBlur, true);
+      window.removeEventListener('muxvo:compositor-flush-pre', onFlushPre);
+      window.removeEventListener('muxvo:compositor-flush-post', onFlushPost);
       window.removeEventListener('muxvo:theme-change', onThemeChange);
       window.removeEventListener('muxvo:global-zoom', onGlobalZoom);
       window.removeEventListener('muxvo:terminal-refit', onRefit);
@@ -538,6 +640,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       window.removeEventListener('focus', onWindowFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       scrollDisposable.dispose();
+      renderDisposable.dispose();
       writeDisposable.dispose();
       addonManager.disposeAll();
       term.dispose();
