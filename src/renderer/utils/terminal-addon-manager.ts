@@ -26,8 +26,13 @@ import { SearchAddon } from '@xterm/addon-search';
 let activeWebglCount = 0;
 const MAX_WEBGL_CONTEXTS = 4;
 
-/** Exported for testing only */
+/** Exported for testing and diagnostics */
 export function _getActiveWebglCount(): number {
+  return activeWebglCount;
+}
+
+/** Current active WebGL context count (for diagnostic logging) */
+export function getActiveWebglCount(): number {
   return activeWebglCount;
 }
 

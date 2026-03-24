@@ -15,11 +15,19 @@
 import { glyphLog } from './glyph-logger';
 import { termLog } from './term-debug-logger';
 import { ringPush, getAllRingTerminalIds } from './scroll-event-ring';
+import { getActiveWebglCount } from './terminal-addon-manager';
+
+const appStartTime = Date.now();
 
 export function forceCompositorFlush(reason: string = 'unknown'): void {
   try {
-    glyphLog('flush', `reason=${reason}`);
-    termLog('compositorFlush', `reason=${reason}`);
+    const uptimeSec = Math.round((Date.now() - appStartTime) / 1000);
+    const termCount = document.querySelectorAll('.xterm').length;
+    const webglCount = getActiveWebglCount();
+    const hidden = document.hidden;
+
+    glyphLog('flush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount} hidden=${hidden}`);
+    termLog('compositorFlush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount}`);
     for (const id of getAllRingTerminalIds()) {
       ringPush(id, 'compositorFlush', `reason=${reason}`);
     }
