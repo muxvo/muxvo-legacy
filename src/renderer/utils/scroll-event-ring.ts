@@ -14,7 +14,7 @@ interface RingEntry {
 }
 
 const rings = new Map<string, RingEntry[]>();
-const MAX_ENTRIES = 30;
+const MAX_ENTRIES = 80;
 
 /** Push an event into the ring buffer for a terminal (no IPC). */
 export function ringPush(termId: string, tag: string, detail: string): void {

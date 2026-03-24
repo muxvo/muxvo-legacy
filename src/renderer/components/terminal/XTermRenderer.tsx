@@ -141,29 +141,53 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     let prevScrollViewportY = 0;
     const scrollDisposable = term.onScroll(() => {
       const vY = term.buffer.active.viewportY;
-      const bY = term.buffer.active.baseY;
-      // Ring: always push (no IPC cost)
-      ringPush(terminalId, 'scroll', `vY=${vY} bY=${bY} prevVY=${prevScrollViewportY}`);
       prevScrollViewportY = vY;
       syncScrollDataAttrs();
     });
 
+    // Helper: read DOM-level scrollTop from .xterm-viewport element
+    function getDomScrollState(): { domST: number; domSH: number } {
+      const vp = containerRef.current?.querySelector('.xterm-viewport') as HTMLElement | null;
+      return { domST: vp ? Math.round(vp.scrollTop) : -1, domSH: vp ? Math.round(vp.scrollHeight) : -1 };
+    }
+
+    // onRender jump detection — fires on every xterm render frame.
+    // More reliable than onScroll for catching DOM-level scrollTop resets.
+    let renderPrevVY = 0;
+    const renderDisposable = term.onRender(() => {
+      const vY = term.buffer.active.viewportY;
+      const bY = term.buffer.active.baseY;
+      if (renderPrevVY > 5 && vY === 0 && bY > 10) {
+        const { domST, domSH } = getDomScrollState();
+        termLog('render:jump!', `id=${terminalId} renderPrevVY=${renderPrevVY} → vY=0 bY=${bY} domST=${domST} domSH=${domSH}`);
+        ringFlush(terminalId, `renderJump ${renderPrevVY}->0`);
+      }
+      renderPrevVY = vY;
+    });
+
     // Poll-based scroll jump detection (500ms interval).
     // onScroll misses DOM-level scrollTop resets (CSS relayout, compositing layer changes).
-    // Polling viewportY catches ALL jump sources regardless of mechanism.
+    // Polling viewportY + DOM scrollTop catches ALL jump sources.
     let pollPrevVY = 0;
     const scrollPollTimer = setInterval(() => {
       if (disposed) return;
       const vY = term.buffer.active.viewportY;
       const bY = term.buffer.active.baseY;
+      const { domST, domSH } = getDomScrollState();
       const delta = pollPrevVY - vY;
-      if (pollPrevVY > 5 && vY === 0 && bY > 10) {
-        termLog('scrollPoll:jump!', `id=${terminalId} pollPrevVY=${pollPrevVY} → vY=0 bY=${bY}`);
-        ringFlush(terminalId, `pollJump ${pollPrevVY}->0`);
-      } else if (delta > 50 && bY > 10) {
-        termLog('scrollPoll:jump!', `id=${terminalId} pollPrevVY=${pollPrevVY} → vY=${vY} bY=${bY} delta=${delta}`);
+
+      // Detect jump to top or large backward jump
+      if ((pollPrevVY > 5 && vY === 0 && bY > 10) || (delta > 50 && bY > 10)) {
+        termLog('scrollPoll:jump!', `id=${terminalId} pollPrevVY=${pollPrevVY} → vY=${vY} bY=${bY} delta=${delta} domST=${domST} domSH=${domSH}`);
         ringFlush(terminalId, `pollJump ${pollPrevVY}->${vY}`);
       }
+
+      // Detect DOM vs xterm mismatch (scrollTop=0 but viewportY>0)
+      if (vY > 10 && domST === 0 && domSH > 100) {
+        termLog('scrollPoll:domMismatch!', `id=${terminalId} vY=${vY} bY=${bY} domST=0 domSH=${domSH}`);
+        ringFlush(terminalId, `domMismatch vY=${vY} domST=0`);
+      }
+
       pollPrevVY = vY;
     }, 500);
     // Also sync after any write (covers initial buffer replay)
@@ -338,6 +362,9 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     let bufferedDataWritten = false;
     const pendingLiveData: string[] = [];
 
+    // Detect escape sequences that may cause viewport scroll changes
+    const SCROLL_DANGER_RE = /\x1b\[\??(?:1049[hl]|H|2J|1;1H)/;
+
     const unsubOutput = window.api.terminal.onOutput((event) => {
       if (event.id === terminalId) {
         trackRenderer('ipcOutput');
@@ -347,11 +374,18 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
           termLog('output', `id=${terminalId} bytes=${event.data.length} buffered=true queueLen=${pendingLiveData.length}`);
         } else {
           trackRenderer('termWrite');
+          // Detect escape sequences that may reset viewport (cursor home, clear, alt buffer)
+          if (SCROLL_DANGER_RE.test(event.data)) {
+            const vY = term.buffer.active.viewportY;
+            const escaped = event.data.slice(0, 80).replace(/[\x00-\x1f]/g, (c: string) => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+            termLog('write:dangerSeq', `id=${terminalId} vY=${vY} bY=${term.buffer.active.baseY} seq=${escaped}`);
+            ringPush(terminalId, 'write:danger', `vY=${vY} bytes=${event.data.length}`);
+          }
           term.write(event.data);
-          // Sampled log (2%) for live output
-          if (Math.random() < 0.02) {
+          // Sampled log (10%) for live output — increased from 2% for scroll debugging
+          if (Math.random() < 0.1) {
             const rect = containerRef.current?.getBoundingClientRect();
-            termLog('write', `id=${terminalId} bytes=${event.data.length} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
+            termLog('write', `id=${terminalId} bytes=${event.data.length} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
           }
         }
       }
@@ -530,6 +564,30 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     };
     containerEl.addEventListener('mousedown', onContainerMouseDown);
 
+    // Track terminal container focus/blur (may correlate with scroll jumps)
+    const onContainerFocus = () => {
+      ringPush(terminalId, 'focus', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY}`);
+    };
+    const onContainerBlur = () => {
+      ringPush(terminalId, 'blur', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY}`);
+    };
+    containerEl.addEventListener('focus', onContainerFocus, true);
+    containerEl.addEventListener('blur', onContainerBlur, true);
+
+    // Compositor flush scroll snapshots — record vY/bY/domScrollTop before and after flush
+    const onFlushPre = () => {
+      if (disposed) return;
+      const { domST } = getDomScrollState();
+      ringPush(terminalId, 'flush:pre', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY} domST=${domST}`);
+    };
+    const onFlushPost = () => {
+      if (disposed) return;
+      const { domST } = getDomScrollState();
+      ringPush(terminalId, 'flush:post', `vY=${term.buffer.active.viewportY} bY=${term.buffer.active.baseY} domST=${domST}`);
+    };
+    window.addEventListener('muxvo:compositor-flush-pre', onFlushPre);
+    window.addEventListener('muxvo:compositor-flush-post', onFlushPost);
+
     // Pause cursor blink when window loses focus to reduce idle CPU usage.
     // WebGL renderer's rAF loop runs continuously when cursorBlink is true,
     // even when the window is behind other windows. Pausing the blink
@@ -569,6 +627,10 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       unsubOutput();
       observer.disconnect();
       containerEl?.removeEventListener('mousedown', onContainerMouseDown);
+      containerEl?.removeEventListener('focus', onContainerFocus, true);
+      containerEl?.removeEventListener('blur', onContainerBlur, true);
+      window.removeEventListener('muxvo:compositor-flush-pre', onFlushPre);
+      window.removeEventListener('muxvo:compositor-flush-post', onFlushPost);
       window.removeEventListener('muxvo:theme-change', onThemeChange);
       window.removeEventListener('muxvo:global-zoom', onGlobalZoom);
       window.removeEventListener('muxvo:terminal-refit', onRefit);
@@ -578,6 +640,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       window.removeEventListener('focus', onWindowFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       scrollDisposable.dispose();
+      renderDisposable.dispose();
       writeDisposable.dispose();
       addonManager.disposeAll();
       term.dispose();
