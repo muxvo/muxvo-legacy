@@ -363,7 +363,14 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     const pendingLiveData: string[] = [];
 
     // Detect escape sequences that may cause viewport scroll changes
-    const SCROLL_DANGER_RE = /\x1b\[\??(?:1049[hl]|H|2J|1;1H)/;
+    const SCROLL_DANGER_RE = /\x1b\[\??(?:1049[hl]|H|2J|3J|1;1H)/;
+
+    // Strip \x1b[3J (ED3 - Erase Saved Lines / clear scrollback) from terminal output.
+    // CC's TUI mode sends \x1b[2J\x1b[3J\x1b[H on every redraw. \x1b[3J destroys
+    // xterm's scrollback buffer, resetting viewportY to 0 and losing the user's
+    // scroll position. Muxvo manages terminal history via its own buffer manager,
+    // so clearing xterm's scrollback is both unnecessary and harmful.
+    const STRIP_ED3_RE = /\x1b\[3J/g;
 
     const unsubOutput = window.api.terminal.onOutput((event) => {
       if (event.id === terminalId) {
@@ -381,7 +388,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
             termLog('write:dangerSeq', `id=${terminalId} vY=${vY} bY=${term.buffer.active.baseY} seq=${escaped}`);
             ringPush(terminalId, 'write:danger', `vY=${vY} bytes=${event.data.length}`);
           }
-          term.write(event.data);
+          term.write(event.data.replace(STRIP_ED3_RE, ''));
           // Sampled log (10%) for live output — increased from 2% for scroll debugging
           if (Math.random() < 0.1) {
             const rect = containerRef.current?.getBoundingClientRect();
