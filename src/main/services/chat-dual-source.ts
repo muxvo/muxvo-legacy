@@ -258,8 +258,19 @@ export function createChatProjectReader(opts: ChatProjectReaderOpts) {
       let resolvedType: 'user' | 'assistant' | 'system' = type as 'user' | 'assistant';
 
       if (type === 'queue-operation') {
-        // queue-operation: user interruption message sent while Claude is working
-        resolvedType = 'user';
+        // queue-operation: check if it's a system notification or user interruption
+        const contentStr = typeof normalizedContent === 'string' ? normalizedContent : '';
+        const trimmedContent = contentStr.trimStart();
+        if (
+          trimmedContent.startsWith('<task-notification>') ||
+          trimmedContent.startsWith('<system-reminder>') ||
+          trimmedContent.startsWith('<command-message>') ||
+          trimmedContent.startsWith('<command-name>')
+        ) {
+          resolvedType = 'system';
+        } else {
+          resolvedType = 'user';
+        }
       } else if (type === 'user') {
         // Check for system message markers on user-type entries
         if (entry.isCompactSummary === true) {
