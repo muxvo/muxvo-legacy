@@ -108,7 +108,8 @@ export function createConfigManager(deps?: ConfigManagerDeps) {
         fsAdapter.mkdirSync(configDir, { recursive: true });
       }
 
-      const fullConfig = { ...DEFAULT_CONFIG, ...config };
+      const existing = loadConfig();
+      const fullConfig = { ...existing, ...config };
       const data = JSON.stringify(fullConfig, null, 2);
 
       // Atomic write: write tmp then rename

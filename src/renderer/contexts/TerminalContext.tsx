@@ -193,6 +193,7 @@ export function TerminalProvider({ children }: { children: ReactNode }): JSX.Ele
           id: info.id,
           state: info.state,
           cwd: info.cwd || '/',
+          sessionId: info.sessionId,
         }));
         termLog('setTerminals', `source=mount count=${entries.length} ids=${entries.map((e: { id: string }) => e.id.slice(0, 5)).join(',')}`);
         dispatch({ type: 'SET_TERMINALS', entries });

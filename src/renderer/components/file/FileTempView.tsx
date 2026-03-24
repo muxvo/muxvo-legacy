@@ -317,7 +317,9 @@ export function FileTempView({
         // Persist width to config
         if (finalSide) {
           const key = finalSide === 'left' ? 'ftvLeftWidth' : 'ftvRightWidth';
-          window.api.app.saveConfig({ [key]: latestWidthRef.current }).catch(() => {});
+          window.api.app.getConfig().then((result: any) => {
+            window.api.app.saveConfig({ ...result?.data, [key]: latestWidthRef.current });
+          }).catch(() => {});
         }
       }
 
