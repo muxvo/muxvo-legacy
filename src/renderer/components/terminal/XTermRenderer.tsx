@@ -139,28 +139,33 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     }
     // Track previous viewportY to detect abnormal scroll-to-top events
     let prevScrollViewportY = 0;
-    // Flag: suppress scrollJump detection during fitPreservingScroll restoration
-    // (scrollToBottom + scrollLines intermediate steps are not real jumps)
-    let inScrollRestore = false;
     const scrollDisposable = term.onScroll(() => {
       const vY = term.buffer.active.viewportY;
       const bY = term.buffer.active.baseY;
       // Ring: always push (no IPC cost)
       ringPush(terminalId, 'scroll', `vY=${vY} bY=${bY} prevVY=${prevScrollViewportY}`);
-      // Detect anomaly: large unexpected backward jump (skip during scroll restore)
-      if (!inScrollRestore) {
-        const jumpDelta = prevScrollViewportY - vY;
-        const isJumpToTop = prevScrollViewportY > 5 && vY === 0 && bY > 10;
-        const isLargeJump = jumpDelta > 20 && bY > 10;
-        if (isJumpToTop || isLargeJump) {
-          termLog('scrollJump!', `id=${terminalId} prevVY=${prevScrollViewportY} → vY=${vY} bY=${bY} delta=${jumpDelta} toTop=${isJumpToTop}`);
-          // Flush ring to get full event trace leading up to the jump
-          ringFlush(terminalId, `scrollJump prevVY=${prevScrollViewportY}->vY=${vY}`);
-        }
-      }
       prevScrollViewportY = vY;
       syncScrollDataAttrs();
     });
+
+    // Poll-based scroll jump detection (500ms interval).
+    // onScroll misses DOM-level scrollTop resets (CSS relayout, compositing layer changes).
+    // Polling viewportY catches ALL jump sources regardless of mechanism.
+    let pollPrevVY = 0;
+    const scrollPollTimer = setInterval(() => {
+      if (disposed) return;
+      const vY = term.buffer.active.viewportY;
+      const bY = term.buffer.active.baseY;
+      const delta = pollPrevVY - vY;
+      if (pollPrevVY > 5 && vY === 0 && bY > 10) {
+        termLog('scrollPoll:jump!', `id=${terminalId} pollPrevVY=${pollPrevVY} → vY=0 bY=${bY}`);
+        ringFlush(terminalId, `pollJump ${pollPrevVY}->0`);
+      } else if (delta > 50 && bY > 10) {
+        termLog('scrollPoll:jump!', `id=${terminalId} pollPrevVY=${pollPrevVY} → vY=${vY} bY=${bY} delta=${delta}`);
+        ringFlush(terminalId, `pollJump ${pollPrevVY}->${vY}`);
+      }
+      pollPrevVY = vY;
+    }, 500);
     // Also sync after any write (covers initial buffer replay)
     const writeDisposable = term.onWriteParsed(() => syncScrollDataAttrs());
 
@@ -213,6 +218,17 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
         console.trace();
       }
 
+      // No-op fit: dimensions unchanged → skip scroll restoration entirely.
+      // This prevents compositorFlush and other no-resize triggers from
+      // unnecessarily executing scrollToBottom + scrollLines, which can
+      // perpetuate a corrupted vY=0 state.
+      if (term.cols === prevCols && term.rows === prevRows) {
+        if (viewport) viewport.style.visibility = '';
+        termLog('scrollFit:noop', `id=${terminalId} src=${source} seq=${seq} ${prevCols}x${prevRows} → no change`);
+        ringPush(terminalId, 'fit:noop', `src=${source} seq=${seq}`);
+        return;
+      }
+
       // Defer scroll restoration to next frame — xterm needs a tick to
       // complete buffer rewrap and update baseY/viewportY after fit().
       requestAnimationFrame(() => {
@@ -225,9 +241,6 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
           if (viewport) viewport.style.visibility = '';
           return;
         }
-        // Suppress scrollJump detection during restoration (intermediate
-        // scrollToBottom + scrollLines steps are not real jumps)
-        inScrollRestore = true;
         if (wasAtBottom) {
           term.scrollToBottom();
         } else {
@@ -239,7 +252,6 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
             term.scrollLines(-newOffset);
           }
         }
-        inScrollRestore = false;
         syncScrollDataAttrs();
         // Diagnostic: log scroll state AFTER restoration
         termLog('scrollFit:after', `id=${terminalId} src=${source} seq=${seq} viewportY=${term.buffer.active.viewportY} baseY=${term.buffer.active.baseY} wasAtBottom=${wasAtBottom}`);
@@ -526,6 +538,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       termLog('unmount', `id=${terminalId}`);
       disposed = true;
       clearTimeout(safetyTimer);
+      clearInterval(scrollPollTimer);
       unsubOutput();
       observer.disconnect();
       containerEl?.removeEventListener('mousedown', onContainerMouseDown);
