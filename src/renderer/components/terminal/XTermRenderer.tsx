@@ -365,12 +365,11 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
     // Detect escape sequences that may cause viewport scroll changes
     const SCROLL_DANGER_RE = /\x1b\[\??(?:1049[hl]|H|2J|3J|1;1H)/;
 
-    // Strip \x1b[3J (ED3 - Erase Saved Lines / clear scrollback) from terminal output.
-    // CC's TUI mode sends \x1b[2J\x1b[3J\x1b[H on every redraw. \x1b[3J destroys
-    // xterm's scrollback buffer, resetting viewportY to 0 and losing the user's
-    // scroll position. Muxvo manages terminal history via its own buffer manager,
-    // so clearing xterm's scrollback is both unnecessary and harmful.
-    const STRIP_ED3_RE = /\x1b\[3J/g;
+    // Regex to detect \x1b[3J (ED3 - Erase Saved Lines / clear scrollback).
+    // CC's TUI sends this on every redraw. It clears xterm's scrollback and
+    // resets viewportY to 0. We let it through (filtering causes duplicate content)
+    // but restore scroll position via write callback.
+    const ED3_RE = /\x1b\[3J/;
 
     const unsubOutput = window.api.terminal.onOutput((event) => {
       if (event.id === terminalId) {
@@ -388,7 +387,16 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
             termLog('write:dangerSeq', `id=${terminalId} vY=${vY} bY=${term.buffer.active.baseY} seq=${escaped}`);
             ringPush(terminalId, 'write:danger', `vY=${vY} bytes=${event.data.length}`);
           }
-          term.write(event.data.replace(STRIP_ED3_RE, ''));
+          // If data contains ED3 (clear scrollback), save scroll state and restore
+          // after xterm finishes processing. This prevents the viewport from staying
+          // at the top after CC's TUI redraw.
+          const hadED3 = ED3_RE.test(event.data);
+          const wasAtBottom = term.buffer.active.viewportY >= term.buffer.active.baseY;
+          term.write(event.data, () => {
+            if (hadED3 && wasAtBottom) {
+              term.scrollToBottom();
+            }
+          });
           // Sampled log (10%) for live output — increased from 2% for scroll debugging
           if (Math.random() < 0.1) {
             const rect = containerRef.current?.getBoundingClientRect();
