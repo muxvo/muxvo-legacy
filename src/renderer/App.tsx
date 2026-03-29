@@ -236,6 +236,12 @@ function AppContent({
 
   return (
     <div className="app">
+      {/* Hidden reference element for GPU glyph integrity check (capturePage reads these pixels) */}
+      <div id="glyph-ref" style={{
+        position: 'fixed', top: 0, left: 0, width: 64, height: 16,
+        opacity: 0.01, pointerEvents: 'none', zIndex: -1,
+        fontFamily: 'monospace', fontSize: 14, color: '#ffffff', background: '#000000',
+      }}>ABCDEFG</div>
       <MenuBar viewMode={terminalState.viewMode} onBackToTiling={actions.handleBackToTiling} terminalCount={terminals.length} />
       <main className="app-content">
         <TerminalGrid

@@ -14,13 +14,16 @@
 
 import { useEffect, useRef } from 'react';
 import { forceCompositorFlush } from '../utils/force-repaint';
-import { initGlyphIntegrityCheck } from '../utils/glyph-integrity-check';
+import { initGlyphIntegrityCheck, initGpuIntegrityCheck } from '../utils/glyph-integrity-check';
 import type { PanelState } from '../contexts/PanelContext';
 
 export function useCompositorGuard(panelState: PanelState): void {
-  // 0. Initialize glyph integrity check (captures reference hash at startup)
+  // 0. Initialize glyph integrity checks (CPU + GPU reference hashes)
   useEffect(() => {
     initGlyphIntegrityCheck();
+    // GPU check needs DOM to be rendered first, delay slightly
+    const timer = setTimeout(() => { initGpuIntegrityCheck(); }, 2000);
+    return () => clearTimeout(timer);
   }, []);
 
   // 1. Periodic flush (30s interval, only when app is visible)
@@ -33,7 +36,7 @@ export function useCompositorGuard(panelState: PanelState): void {
 
   // 2. Flush on window focus (returning from other apps)
   useEffect(() => {
-    const onFocus = (): void => forceCompositorFlush('windowFocus');
+    const onFocus = (): void => { forceCompositorFlush('windowFocus'); };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, []);

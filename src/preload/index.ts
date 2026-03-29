@@ -304,6 +304,10 @@ const api = {
   glyphLog: (message: string) =>
     ipcRenderer.send('glyph:log', { message }),
 
+  // --- GPU readback via capturePage (detects + repairs glyph corruption) ---
+  captureFlush: (rect?: { x: number; y: number; width: number; height: number }): Promise<Buffer | null> =>
+    ipcRenderer.invoke('glyph:capture-flush', rect),
+
   // --- Terminal diagnostic log (writes to ~/.muxvo/logs/terminal-debug.log) ---
   termDebugLog: (message: string) =>
     ipcRenderer.send(IPC_CHANNELS.TERMINAL.DEBUG_LOG, { message }),

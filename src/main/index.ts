@@ -485,6 +485,16 @@ app.whenReady().then(() => {
         .then(() => appendFile(glyphLogPath, line))
         .catch(() => {});
     });
+
+    // capturePage triggers GPU readback → detects + repairs glyph corruption
+    // Equivalent to macOS screenshot: forces compositor to re-rasterize all tiles
+    ipcMain.handle('glyph:capture-flush', async (event, rect?: { x: number; y: number; width: number; height: number }) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win || win.isDestroyed()) return null;
+      const captureRect = rect || { x: 0, y: 0, width: 1, height: 1 };
+      const image = await win.webContents.capturePage(captureRect);
+      return image.toBitmap();
+    });
   }
 
   // Terminal debug log: renderer + main → terminal-debug.log
