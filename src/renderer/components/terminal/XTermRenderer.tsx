@@ -182,11 +182,9 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
         ringFlush(terminalId, `pollJump ${pollPrevVY}->${vY}`);
       }
 
-      // Detect DOM vs xterm mismatch (scrollTop=0 but viewportY>0)
-      if (vY > 10 && domST === 0 && domSH > 100) {
-        termLog('scrollPoll:domMismatch!', `id=${terminalId} vY=${vY} bY=${bY} domST=0 domSH=${domSH}`);
-        ringFlush(terminalId, `domMismatch vY=${vY} domST=0`);
-      }
+      // NOTE: domMismatch detection removed — xterm v6 WebGL renderer does NOT use
+      // DOM scrollbar, so .xterm-viewport scrollTop is always 0. The old check
+      // produced 870K+ false positives flooding the log file.
 
       pollPrevVY = vY;
     }, 500);
@@ -391,7 +389,10 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
           // after xterm finishes processing. This prevents the viewport from staying
           // at the top after CC's TUI redraw.
           const hadED3 = ED3_RE.test(event.data);
-          const wasAtBottom = term.buffer.active.viewportY >= term.buffer.active.baseY;
+          // Use lenient "at bottom" check: within `rows` lines counts as bottom.
+          // After scrollToBottom(), vY can lag behind bY by a few lines due to
+          // async xterm processing (e.g. vY=677 vs bY=684).
+          const wasAtBottom = term.buffer.active.baseY - term.buffer.active.viewportY <= term.rows;
           term.write(event.data, () => {
             if (hadED3 && wasAtBottom) {
               term.scrollToBottom();
@@ -416,7 +417,6 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       if (result?.success && result.data) {
         chunks.push(stripPromptEolMark(result.data));
       }
-      const flushedCount = pendingLiveData.length;
       for (const data of pendingLiveData) {
         if (disposed) break;
         chunks.push(data);
@@ -434,7 +434,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
         }
         {
           const rect = containerRef.current?.getBoundingClientRect();
-          termLog('reveal', `id=${terminalId} flushed=${flushedCount} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
+          termLog('reveal', `id=${terminalId} lines=${term.buffer.active.length} cols=${term.cols} rows=${term.rows} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)}`);
         }
 
         // Now baseY is the real value — scrollToBottom will work correctly
