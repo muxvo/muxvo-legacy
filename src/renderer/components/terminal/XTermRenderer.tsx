@@ -412,15 +412,16 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       if (disposed) return; // Component unmounted — discard
       termLog('bufReplay', `id=${terminalId} bufBytes=${result?.data?.length ?? 0} success=${result?.success}`);
 
-      // Write only the buffer data — DO NOT include pendingLiveData.
-      // Buffer already contains everything up to the fetch moment. pendingLiveData
-      // (IPC events queued between subscribe and fetch) overlaps with the buffer tail.
-      // Flushing both causes duplicate content when the overlap doesn't contain ED3.
+      // Collect all data to write: buffer replay + pending live data
       const chunks: string[] = [];
       if (result?.success && result.data) {
         chunks.push(stripPromptEolMark(result.data));
       }
-      pendingLiveData.length = 0; // discard overlapping data
+      for (const data of pendingLiveData) {
+        if (disposed) break;
+        chunks.push(data);
+      }
+      pendingLiveData.length = 0;
 
       // Helper: called after ALL writes are parsed by xterm (baseY is accurate)
       const onAllWritesParsed = (): void => {
