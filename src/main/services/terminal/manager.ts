@@ -244,11 +244,17 @@ export function createTerminalManager(deps?: TerminalManagerDeps) {
           {
             const terminal = terminals.get(id);
             if (terminal?.suppressingOutput) {
-              // Detect clear completion → stop suppressing
-              if (data.includes('\x1b[2J') || data.includes('\x1b[H\x1b[2J')) {
+              // Detect clear completion → stop suppressing and forward the clear
+              // sequence to renderer so it erases the initial prompt from screen.
+              const clearIdx = data.indexOf('\x1b[H\x1b[2J');
+              const altClearIdx = clearIdx >= 0 ? clearIdx : data.indexOf('\x1b[2J');
+              if (altClearIdx >= 0) {
                 terminal.suppressingOutput = false;
+                data = data.slice(altClearIdx);
+                // Fall through to send clear + post-clear data to renderer
+              } else {
+                return;
               }
-              return;
             }
           }
 
