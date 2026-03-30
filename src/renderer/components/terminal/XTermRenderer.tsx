@@ -385,16 +385,13 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
             termLog('write:dangerSeq', `id=${terminalId} vY=${vY} bY=${term.buffer.active.baseY} seq=${escaped}`);
             ringPush(terminalId, 'write:danger', `vY=${vY} bytes=${event.data.length}`);
           }
-          // If data contains ED3 (clear scrollback), save scroll state and restore
-          // after xterm finishes processing. This prevents the viewport from staying
-          // at the top after CC's TUI redraw.
+          // If data contains ED3 (clear scrollback), scroll to bottom after xterm
+          // finishes processing. ED3 destroys old scrollback — vY=0 after ED3 shows
+          // CC's header/logo, which is useless. Always scrollToBottom unconditionally:
+          // the old scroll position is meaningless since ED3 wiped the old content.
           const hadED3 = ED3_RE.test(event.data);
-          // Use lenient "at bottom" check: within `rows` lines counts as bottom.
-          // After scrollToBottom(), vY can lag behind bY by a few lines due to
-          // async xterm processing (e.g. vY=677 vs bY=684).
-          const wasAtBottom = term.buffer.active.baseY - term.buffer.active.viewportY <= term.rows;
           term.write(event.data, () => {
-            if (hadED3 && wasAtBottom) {
+            if (hadED3) {
               term.scrollToBottom();
             }
           });
