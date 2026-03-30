@@ -488,11 +488,14 @@ app.whenReady().then(() => {
 
     // capturePage triggers GPU readback → detects + repairs glyph corruption
     // Equivalent to macOS screenshot: forces compositor to re-rasterize all tiles
+    // When rect is omitted/undefined: captures entire window (full GPU readback for repair)
+    // When rect is provided: captures specific region (fast, for detection)
     ipcMain.handle('glyph:capture-flush', async (event, rect?: { x: number; y: number; width: number; height: number }) => {
       const win = BrowserWindow.fromWebContents(event.sender);
       if (!win || win.isDestroyed()) return null;
-      const captureRect = rect || { x: 0, y: 0, width: 1, height: 1 };
-      const image = await win.webContents.capturePage(captureRect);
+      const image = rect
+        ? await win.webContents.capturePage(rect)
+        : await win.webContents.capturePage(); // full window — equivalent to macOS screenshot
       return image.toBitmap();
     });
   }

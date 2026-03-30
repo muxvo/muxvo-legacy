@@ -4,21 +4,16 @@
  * Uses capturePage() via IPC to trigger GPU readback — equivalent to
  * macOS screenshot, which forces the compositor to re-rasterize all tiles.
  *
- * Previous approaches that DIDN'T work:
- * - CSS translateZ(0): only marks layers dirty, doesn't force re-rasterize
- * - setZoomFactor(): forces re-rasterize but triggers ResizeObserver → scroll-to-top
- * - OffscreenCanvas integrity check: CPU rendering, misses GPU-only corruption
+ * Detection: captures a reference DOM element (#glyph-ref) and compares
+ * pixel hash against startup baseline. FAIL = GPU corruption detected.
  *
- * capturePage() is the correct fix because:
- * 1. It reads actual post-compositing pixels (GPU readback)
- * 2. The readback forces GPU to re-rasterize all tiles
- * 3. It's the same mechanism as macOS screenshot (proven to fix the issue)
+ * Repair: on FAIL, triggers full-window capturePage (no rect) to force
+ * complete re-rasterization of all compositor tiles.
  */
 import { glyphLog } from './glyph-logger';
 import { termLog } from './term-debug-logger';
-import { ringPush, getAllRingTerminalIds } from './scroll-event-ring';
 import { getActiveWebglCount } from './terminal-addon-manager';
-import { checkGlyphIntegrity, checkGpuIntegrity } from './glyph-integrity-check';
+import { checkGlyphIntegrity, checkGpuIntegrity, forceFullWindowReadback } from './glyph-integrity-check';
 
 const appStartTime = Date.now();
 
@@ -35,8 +30,14 @@ export async function forceCompositorFlush(reason: string = 'unknown'): Promise<
     termLog('compositorFlush', `reason=${reason} uptime=${uptimeSec}s terms=${termCount} webgl=${webglCount}`);
     window.dispatchEvent(new CustomEvent('muxvo:compositor-flush-pre', { detail: reason }));
 
-    // GPU-level check — capturePage() triggers readback → detects + repairs in one call
+    // GPU-level check — capturePage() triggers readback on reference element
     const gpuIntegrity = await checkGpuIntegrity();
+
+    // If GPU corruption detected, force full-window readback (= macOS screenshot)
+    if (!gpuIntegrity.ok) {
+      glyphLog('flush', `GPU_CORRUPTION_DETECTED — triggering full-window readback`);
+      await forceFullWindowReadback();
+    }
 
     window.dispatchEvent(new CustomEvent('muxvo:compositor-flush-post', { detail: reason }));
 

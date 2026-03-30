@@ -5,9 +5,11 @@
  * 1. CPU check (original): OffscreenCanvas fillText → getImageData hash comparison.
  *    Fast but misses GPU-only corruption (always passes when GPU compositor is broken).
  * 2. GPU check (new): capturePage() reads actual post-compositing pixels from a
- *    reference DOM element. This is the "ground truth" — same pixels the user sees.
- *    capturePage() also triggers GPU readback → forces compositor re-rasterize,
- *    so detection and repair happen in one call (equivalent to macOS screenshot).
+ *    reference DOM element (#glyph-ref, fully opaque, on top of everything).
+ *    capturePage() also triggers GPU readback → forces compositor re-rasterize.
+ *
+ * When GPU check detects FAIL, a full-window capturePage is triggered to force
+ * complete compositor re-rasterization (equivalent to macOS screenshot fix).
  */
 
 // --- CPU-level check (original, kept for logging) ---
@@ -35,7 +37,6 @@ function renderAndHash(c: OffscreenCanvasRenderingContext2D): number {
   c.fillStyle = '#ffffff';
   c.fillText(TEST_STRING, 0, 20);
   const data = c.getImageData(0, 0, CANVAS_W, CANVAS_H).data;
-  // Fast hash: sample every 16th byte (alpha channel at stride 4, skip 4 pixels)
   let hash = 0;
   for (let i = 3; i < data.length; i += 16) {
     hash = (hash * 31 + data[i]) | 0;
@@ -57,8 +58,10 @@ export function checkGlyphIntegrity(): { ok: boolean; detail: string } {
   };
 }
 
-// --- GPU-level check (new: reads actual composited pixels via capturePage) ---
+// --- GPU-level check (capturePage reads actual screen pixels) ---
 
+// #glyph-ref element: position:fixed top:0 left:0 width:64 height:16
+// capturePage expects CSS pixels (Electron handles DPR internally)
 const GPU_REF_RECT = { x: 0, y: 0, width: 64, height: 16 };
 let gpuReferenceHash = 0;
 
@@ -73,7 +76,6 @@ function hashBitmap(buf: ArrayLike<number>): number {
 /**
  * Initialize GPU integrity check.
  * Must be called after the #glyph-ref DOM element is rendered.
- * Waits 2 animation frames to ensure GPU has composited the reference text.
  */
 export async function initGpuIntegrityCheck(): Promise<void> {
   try {
@@ -88,8 +90,7 @@ export async function initGpuIntegrityCheck(): Promise<void> {
 
 /**
  * Check GPU-level glyph integrity by capturing actual screen pixels.
- * The capturePage() call itself triggers GPU readback → forces re-rasterize,
- * so this both detects AND repairs corruption in one call.
+ * Returns check result. If FAIL, caller should trigger full-window repair.
  */
 export async function checkGpuIntegrity(): Promise<{ ok: boolean; detail: string }> {
   if (!gpuReferenceHash) {
@@ -109,4 +110,16 @@ export async function checkGpuIntegrity(): Promise<{ ok: boolean; detail: string
   } catch {
     return { ok: true, detail: 'capture_error' };
   }
+}
+
+/**
+ * Full-window GPU readback — equivalent to macOS screenshot.
+ * Forces complete compositor re-rasterization of all tiles.
+ * Called when checkGpuIntegrity detects FAIL.
+ */
+export async function forceFullWindowReadback(): Promise<void> {
+  try {
+    // Pass no rect → captures entire window → full GPU readback
+    await window.api.captureFlush();
+  } catch { /* ignore */ }
 }

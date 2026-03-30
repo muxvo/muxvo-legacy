@@ -236,11 +236,14 @@ function AppContent({
 
   return (
     <div className="app">
-      {/* Hidden reference element for GPU glyph integrity check (capturePage reads these pixels) */}
+      {/* Reference element for GPU glyph integrity check (capturePage reads these pixels).
+          Must be fully opaque + on top so captured pixels are pure reference text,
+          not blended with terminal background. Tiny size (1x1 visual) to not obstruct UI. */}
       <div id="glyph-ref" style={{
         position: 'fixed', top: 0, left: 0, width: 64, height: 16,
-        opacity: 0.01, pointerEvents: 'none', zIndex: -1,
+        opacity: 1, pointerEvents: 'none', zIndex: 99999,
         fontFamily: 'monospace', fontSize: 14, color: '#ffffff', background: '#000000',
+        overflow: 'hidden', clipPath: 'inset(0 0 calc(100% - 1px) calc(100% - 1px))',
       }}>ABCDEFG</div>
       <MenuBar viewMode={terminalState.viewMode} onBackToTiling={actions.handleBackToTiling} terminalCount={terminals.length} />
       <main className="app-content">

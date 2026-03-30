@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import type { SearchAddon } from '@xterm/addon-search';
-import { createAddonManager } from '../../utils/terminal-addon-manager';
+import { createAddonManager, type AddonManager } from '../../utils/terminal-addon-manager';
 import { trackRenderer } from '../../utils/renderer-perf-logger';
 import { resolveTerminalTheme } from '@/shared/constants/terminal-themes';
 import { DEFAULT_TERMINAL_CONFIG } from '@/renderer/stores/terminal-config';
@@ -85,6 +85,7 @@ function extractFilePaths(e: React.DragEvent): string[] {
 export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const addonManagerRef = useRef<AddonManager | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const [searchVisible, setSearchVisible] = useState(false);
   const [fileDropActive, setFileDropActive] = useState(false);
@@ -120,6 +121,7 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       termLog('mount', `id=${terminalId} containerW=${Math.round(rect?.width ?? 0)} containerH=${Math.round(rect?.height ?? 0)} suppressResize=${suppressResizeRef.current}`);
     }
     const addonManager = createAddonManager(term);
+    addonManagerRef.current = addonManager;
     // loadAll is async (waits for document.fonts.ready before WebGL init).
     // FitAddon is loaded synchronously at the start, so getFitAddon() is safe here.
     // SearchAddon is set after the promise resolves.
@@ -655,10 +657,28 @@ export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Elemen
       renderDisposable.dispose();
       writeDisposable.dispose();
       addonManager.disposeAll();
+      addonManagerRef.current = null;
       term.dispose();
       ringRemove(terminalId);
     };
   }, [terminalId]);
+
+  // Release WebGL context when terminal is hidden (focused mode, compact=true)
+  // to reduce GPU memory pressure — root cause of glyph corruption.
+  // Reload when terminal becomes visible again.
+  useEffect(() => {
+    const mgr = addonManagerRef.current;
+    if (!mgr) return;
+    if (suppressResize) {
+      // Terminal hidden → release WebGL to free GPU memory
+      mgr.releaseWebgl();
+    } else {
+      // Terminal visible → reload WebGL if not already active
+      if (!mgr.hasWebgl()) {
+        mgr.reloadWebgl();
+      }
+    }
+  }, [suppressResize]);
 
   const handleFileDragOver = (e: React.DragEvent) => {
     if (hasFilePayload(e)) {

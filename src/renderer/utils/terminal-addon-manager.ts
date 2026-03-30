@@ -48,6 +48,8 @@ export interface AddonManager {
   loadAll(): Promise<AddonSet>;
   disposeAll(): void;
   releaseWebgl(): void;
+  reloadWebgl(): void;
+  hasWebgl(): boolean;
   getFitAddon(): FitAddon;
   getSearchAddon(): SearchAddon;
 }
@@ -177,7 +179,20 @@ export function createAddonManager(term: Terminal): AddonManager {
         try { webglAddon.dispose(); } catch { /* already disposed */ }
         webglAddon = null;
         activeWebglCount--;
+        glyphLog('webgl', `RELEASED activeCount=${activeWebglCount}`);
       }
+    },
+
+    reloadWebgl(): void {
+      if (webglAddon || disposed) return; // already has WebGL or disposed
+      webglAddon = loadWebgl();
+      if (webglAddon) {
+        glyphLog('webgl', `RELOADED activeCount=${activeWebglCount}`);
+      }
+    },
+
+    hasWebgl(): boolean {
+      return webglAddon !== null;
     },
 
     getFitAddon(): FitAddon {
