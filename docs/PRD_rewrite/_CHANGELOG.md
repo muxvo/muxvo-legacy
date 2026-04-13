@@ -20,7 +20,7 @@
 
 - [ ] M11 FILE_PANEL
 - [ ] M14 ONBOARD_PREFS
-- [ ] M15 APP_RELIABILITY
+- [x] M15 APP_RELIABILITY
 
 ## Batch 2（待写）
 
@@ -52,6 +52,7 @@
 
 - 2026-04-13 | M14 ONBOARD_PREFS | 726行 | Batch 1 完成
 - 2026-04-13 | M11 FILE_PANEL | 522行 | Batch 1 完成
+- 2026-04-13 | M15 APP_RELIABILITY | 623行 | Batch 1 完成
 
 ---
 
