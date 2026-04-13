@@ -54,6 +54,8 @@
 - 2026-04-13 | M11 FILE_PANEL | 522行 | Batch 1 完成
 - 2026-04-13 | M15 APP_RELIABILITY | 623行 | Batch 1 完成
 - 2026-04-13 | M02 TERM_GRID | 519行 | Batch 2 完成
+- 2026-04-13 | M01 TERM_LIFECYCLE | 618行 | Batch 2 完成
+- 2026-04-13 | M03 TERM_FOCUS | 516行 | Batch 2 完成
 
 ---
 
