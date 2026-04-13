@@ -60,6 +60,7 @@
 - 2026-04-13 | M06 EDITOR_ATTACH | 540行 | Batch 3 完成
 - 2026-04-13 | M04 TERM_NOTIFY | 514行 | Batch 3 完成
 - 2026-04-13 | M13 CONFIG_MGMT | 764行 | Batch 4 完成
+- 2026-04-13 | M12 FILE_VIEWER | 631行 | Batch 4 完成
 
 ---
 
