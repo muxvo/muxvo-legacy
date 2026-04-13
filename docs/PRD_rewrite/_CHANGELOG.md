@@ -56,6 +56,7 @@
 - 2026-04-13 | M02 TERM_GRID | 519行 | Batch 2 完成
 - 2026-04-13 | M01 TERM_LIFECYCLE | 618行 | Batch 2 完成
 - 2026-04-13 | M03 TERM_FOCUS | 516行 | Batch 2 完成
+- 2026-04-13 | M05 EDITOR_INPUT | 528行 | Batch 3 完成
 
 ---
 
