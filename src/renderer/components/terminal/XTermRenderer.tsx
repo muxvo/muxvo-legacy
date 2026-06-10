@@ -11,6 +11,7 @@ import { trackRenderer } from '../../utils/renderer-perf-logger';
 import { resolveTerminalTheme } from '@/shared/constants/terminal-themes';
 import { DEFAULT_TERMINAL_CONFIG } from '@/renderer/stores/terminal-config';
 import { TerminalSearchBar } from './TerminalSearchBar';
+import { FixtureTermContent } from './FixtureTermContent';
 import { shellEscapePaths } from '../../utils/shell-escape';
 import { stripPromptEolMark } from '@/shared/utils/strip-prompt-eol-mark';
 import { glyphLog } from '../../utils/glyph-logger';
@@ -82,7 +83,15 @@ function extractFilePaths(e: React.DragEvent): string[] {
   return [];
 }
 
-export function XTermRenderer({ terminalId, suppressResize }: Props): JSX.Element {
+/** dev-only：fixture 视觉回归模式下渲染静态替身（标记仅由 fixture.html 入口置位） */
+export function XTermRenderer(props: Props): JSX.Element {
+  if ((window as any).__MUXVO_FIXTURE__) {
+    return <FixtureTermContent terminalId={props.terminalId} />;
+  }
+  return <XTermRendererImpl {...props} />;
+}
+
+function XTermRendererImpl({ terminalId, suppressResize }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const addonManagerRef = useRef<AddonManager | null>(null);

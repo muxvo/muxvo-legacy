@@ -6,6 +6,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "rm -rf out/renderer && electron-vite dev",
+    "fixture:serve": "vite --config fixture.vite.config.ts",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "verify:coverage": "tsx tests/scripts/verify-coverage.ts",

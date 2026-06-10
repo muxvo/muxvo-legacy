@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Muxvo Fixture (dev-only)</title>
+    <style>
+      /* 视觉回归：禁动画/过渡/光标，保证截图确定性 */
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        caret-color: transparent !important;
+      }
+    </style>
+    <script>
+      // ⚠️ dev-only 入口：仅供探针 3 视觉回归 golden 截图（muxvo/tools/visual-diff）。
+      // 生产 bundle 不含本页面；__MUXVO_FIXTURE__ 标记只在这里置位。
+      window.__MUXVO_FIXTURE__ = true;
+      window.__MUXVO_FIXTURE_DATA__ = null;
+      window.__fixtureReady = false;
+
+      function fxFindTerminalByCwd(cwd) {
+        var data = window.__MUXVO_FIXTURE_DATA__;
+        if (!data || !data.terminals) return null;
+        for (var i = 0; i < data.terminals.length; i++) {
+          var t = data.terminals[i];
+          if (cwd === t.cwd || cwd.indexOf(t.cwd + '/') === 0) return t;
+        }
+        return null;
+      }
+
+      // window.api 替身：fixture 页面无 Electron preload，组件触达的 IPC 面在此给定确定性答案
+      window.api = {
+        app: {
+          getHomePath: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            return (data && data.homePath) || '/Users/rl';
+          },
+        },
+        worktree: {
+          detectRepo: function (cwd) {
+            var t = fxFindTerminalByCwd(cwd);
+            var marker = '/.worktrees/';
+            var idx = cwd.indexOf(marker);
+            return Promise.resolve({
+              success: true,
+              data: {
+                isRepo: !!(t && t.isGitRepo),
+                repoPath: idx >= 0 ? cwd.substring(0, idx) : cwd,
+              },
+            });
+          },
+          list: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var registered = [];
+            if (data && data.terminals) {
+              data.terminals.forEach(function (t) {
+                if (t.cwd.indexOf('/.worktrees/') >= 0 && t.worktreeRegistered) {
+                  registered.push({ path: t.cwd });
+                }
+              });
+            }
+            return Promise.resolve({ success: true, data: registered });
+          },
+        },
+        fs: {
+          showFileMenu: function () {},
+        },
+        terminal: {
+          list: function () { return Promise.resolve({ success: true, data: [] }); },
+          onExit: function () { return function () {}; },
+          onStateChange: function () { return function () {}; },
+          onListUpdated: function () { return function () {}; },
+          onCwdChange: function () { return function () {}; },
+          acknowledgeWaiting: function () {},
+          setName: function () { return Promise.resolve({ success: true }); },
+        },
+        chat: {
+          setSessionName: function () { return Promise.resolve({ success: true }); },
+        },
+      };
+      window.api.app.getConfig = function () { return Promise.resolve({ success: true, data: {} }); };
+      window.api.app.getPreferences = function () { return Promise.resolve({ success: true, data: {} }); };
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./fixture-main.tsx"></script>
+  </body>
+</html>
