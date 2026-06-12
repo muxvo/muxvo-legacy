@@ -52,6 +52,10 @@
           },
           list: function () {
             var data = window.__MUXVO_FIXTURE_DATA__;
+            // worktree-popover 屏（M2 B1）：fixture 给定完整 WorktreeInfo 列表
+            if (data && data.worktree && data.worktree.worktrees) {
+              return Promise.resolve({ success: true, data: data.worktree.worktrees });
+            }
             var registered = [];
             if (data && data.terminals) {
               data.terminals.forEach(function (t) {
@@ -61,6 +65,12 @@
               });
             }
             return Promise.resolve({ success: true, data: registered });
+          },
+          preCheck: function () {
+            // worktree-popover 屏（M2 B1）：大仓警告由 fixture 给定（wt-warning）
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var warning = (data && data.worktree && data.worktree.warning) || null;
+            return Promise.resolve({ success: true, data: { warning: warning } });
           },
         },
         fs: {
