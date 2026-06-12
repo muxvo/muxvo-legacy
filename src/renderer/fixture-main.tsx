@@ -44,6 +44,8 @@ import { WorkspaceManagerModal } from './components/workspace/WorkspaceManagerMo
 import { WhatsNewModal } from './components/whats-new/WhatsNewModal';
 import { MenuBar } from './components/layout/MenuBar';
 import { SkillsPanel } from './components/skill/SkillsPanel';
+import { FilePanel } from './components/file/FilePanel';
+import { FileTempView } from './components/file/FileTempView';
 import { McpPanel } from './components/mcp/McpPanel';
 import { HooksPanel } from './components/hook/HooksPanel';
 import { PluginPanel } from './components/plugin/PluginPanel';
@@ -121,7 +123,31 @@ interface FixtureData extends Partial<FixtureBase> {
     dirtyValue?: string;
   };
   files?: Record<string, string>;
-  dirs?: Record<string, { name: string; isDirectory: boolean }[]>;
+  dirs?: Record<string, { name: string; isDirectory: boolean; size?: number }[]>;
+  /** B4 file 簇：列宽/隐藏文件开关（getConfig 替身合并进答案） */
+  fileConfig?: Record<string, unknown>;
+  /** B4 file-panel 屏 payload（树数据走 dirs/fs.readDir 替身；展开经 driver 点生产路径） */
+  filePanel?: {
+    projectCwd: string;
+    /** 依序点开的文件夹（childName = 展开后等待出现的子项名，作为下一步推进闸） */
+    expandFolders?: { name: string; childName: string }[];
+  };
+  /** B4 file-temp-view 屏 payload（content/fileType 直灌 props，App.tsx:198-230 编排等价） */
+  ftv?: {
+    projectCwd: string;
+    filePath: string;
+    fileType: 'markdown' | 'code' | 'text' | 'image' | 'spreadsheet' | 'pdf';
+    /** md/code/text=utf8 文本；spreadsheet=base64 xlsx；image=data-URI（hard-substitute，
+     *  生产为 local-file:// 协议 URL，同 DOM 同 CSS）；pdf=文件路径（PdfPreview 自行 readFile） */
+    content: string;
+    sourceTerminalId: string;
+    /** 驱动到 source 模式（点 mode 钮，生产路径） */
+    sourceMode?: boolean;
+    /** 非空 = source 模式注值置 dirty（原生 setter，终值须 ≠ content） */
+    dirtyValue?: string;
+    /** dirty 后点返回钮 → UnsavedPromptDialog 二层 */
+    unsaved?: boolean;
+  };
   /** B3 mcp-panel 屏 payload（servers 由替身按 scope 反拼配置文件） */
   mcp?: {
     servers: { name: string; scope: string; [k: string]: unknown }[];
@@ -192,11 +218,38 @@ const B3_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
     fx.plugins?.error ? '.plugin-panel__empty' : '.plugin-panel__detail',
 };
 
+/**
+ * B4 file 簇就位选择器：同 B2/B3 思路——目标终态元素把关。file-panel 的展开链由
+ * driver 末步在 .file-panel__content 打 data-fx-ready（B2 data-fx-scrolled 先例）；
+ * ftv 按 fileType/驱动终态取键（image 等 img load 后打标，防截到未解码空位）。
+ */
+const B4_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
+  'file-panel': () => '.file-panel__content[data-fx-ready]',
+  'file-temp-view': (fx) => {
+    const f = fx.ftv;
+    if (f?.unsaved) return '.unsaved-prompt-dialog';
+    if (f?.dirtyValue != null) return '.file-temp-view__dirty-dot';
+    switch (f?.fileType) {
+      case 'markdown':
+        return '.markdown-wysiwyg .tiptap h1';
+      case 'image':
+        return '.file-temp-view__image img[data-fx-loaded]';
+      case 'spreadsheet':
+        return '.spreadsheet-view__table';
+      case 'pdf':
+        return '.pdf-preview--error';
+      default:
+        return '.file-temp-view__editor';
+    }
+  },
+};
+
 function readySelectorFor(fx: FixtureData): string | undefined {
   const screen = fx.screen ?? '';
   return (
     MODAL_READY_SELECTOR[screen]?.(fx) ??
     B3_READY_SELECTOR[screen]?.(fx) ??
+    B4_READY_SELECTOR[screen]?.(fx) ??
     POPOVER_READY_SELECTOR[screen]
   );
 }
@@ -480,6 +533,130 @@ function FixtureModalHost({ fx }: { fx: FixtureData }): JSX.Element | null {
 
 const MODAL_SCREENS = new Set(Object.keys(MODAL_READY_SELECTOR));
 
+// ── M2 B4 hosts（file 簇） ──
+
+/**
+ * file-panel 屏宿主：base 网格底图 + 直挂 FilePanel（生产由 App.tsx:309-319 按
+ * PanelContext.filePanel.open 条件挂载，fixture 等价直挂；projectCwd 即 App 由
+ * terminalId 求得的 cwd）。树数据走 fixture.html fs.readDir 替身（dirs 字典）；
+ * 展开态经 FixtureDriver 按名点 folder 行（生产 click 路径），每步以「展开后必现的
+ * 子项名」为推进闸，末步在 .file-panel__content 打 data-fx-ready。
+ * ⚠️ NEW 徽标不可达：FilePanel.mapIpcEntries 不产出 isNew（specs/behavior/file-panel.md §0），
+ * golden 以运行实况为准（无徽标）。
+ */
+function FixtureFilePanelHost({ fx, base }: { fx: FixtureData; base: FixtureBase }): JSX.Element {
+  const fp = fx.filePanel!;
+  const steps: DriverStep[] = [];
+  if (fx.fileConfig?.showHiddenFiles) {
+    steps.push({
+      // 前置闸：等 getConfig 的 showHiddenFiles 异步落地（隐藏条目已渲染）再点展开——
+      // 否则 showHidden 翻转会重载根列表，吃掉已完成的展开（实测 warm page 竞态）
+      find: () =>
+        Array.from(document.querySelectorAll<HTMLElement>('.file-panel .file-item__name')).find(
+          (el) => (el.textContent ?? '').startsWith('.'),
+        ) ?? null,
+      act: noop,
+    });
+  }
+  for (const folder of fp.expandFolders ?? []) {
+    steps.push({
+      find: () => findByText('.file-panel .file-item__name', folder.name),
+      act: click,
+    });
+    steps.push({
+      // 推进闸：子项渲染后才继续（防末步早打 ready 截到未展开中间态）
+      find: () => findByText('.file-panel .file-item__name', folder.childName),
+      act: noop,
+    });
+  }
+  steps.push({
+    find: () => document.querySelector('.file-panel__content'),
+    act: (el) => el.setAttribute('data-fx-ready', ''),
+  });
+  return (
+    <div className="app">
+      <main className="app-content">
+        <TerminalGrid
+          key={fx.id}
+          terminals={base.terminals}
+          viewMode={base.viewMode}
+          focusedId={base.focusedId}
+          selectedId={base.selectedId}
+          activeSidebarId={base.activeSidebarId}
+          maxReached={base.maxReached}
+          onAddTerminal={noop}
+          onClose={noop}
+          onRename={noop}
+          onReorder={noop}
+          onDoubleClick={noop}
+          onFocusTerminal={noop}
+          onSidebarClick={noop}
+          onSidebarActivate={noop}
+          onSidebarDeactivate={noop}
+          onClick={noop}
+          onBackToTiling={noop}
+        />
+      </main>
+      <FilePanel projectCwd={fp.projectCwd} onClose={noop} onOpenFile={noop} />
+      <FixtureDriver steps={steps} />
+    </div>
+  );
+}
+
+/**
+ * file-temp-view 屏宿主：单组件直挂（容器自带 --bg-deep 满幅底，top 36px 露 body 底色，
+ * 与生产 MenuBar 区几何一致）。content/fileType 直灌 props（App.tsx:198-230 编排等价，
+ * 绕过 readFile）；右栏终端内容经顶层 terminals（base 摊平）喂 FixtureTermContent；
+ * source/dirty/unsaved 经 FixtureDriver 走生产 click/原生 setter 路径。
+ */
+function FixtureFtvHost({ fx, base }: { fx: FixtureData; base: FixtureBase }): JSX.Element {
+  const f = fx.ftv!;
+  const steps: DriverStep[] = [];
+  if (f.sourceMode || f.dirtyValue != null) {
+    steps.push({ find: () => document.querySelector('.file-temp-view__mode-btn'), act: click });
+  }
+  if (f.dirtyValue != null) {
+    steps.push({
+      find: () => document.querySelector('.file-temp-view__editor'),
+      act: (el) => setTextareaValue(el as HTMLTextAreaElement, f.dirtyValue!),
+    });
+  }
+  if (f.unsaved) {
+    steps.push({ find: () => document.querySelector('.file-temp-view__back'), act: click });
+  }
+  if (f.fileType === 'image') {
+    steps.push({
+      // img 解码完成后打标（ready 把关键），防截到未 load 空位
+      find: () => document.querySelector('.file-temp-view__image img'),
+      act: (el) => {
+        const img = el as HTMLImageElement;
+        const mark = () => img.setAttribute('data-fx-loaded', '');
+        if (img.complete && img.naturalWidth > 0) mark();
+        else img.addEventListener('load', mark, { once: true });
+      },
+    });
+  }
+  return (
+    <>
+      <FileTempView
+        projectCwd={f.projectCwd}
+        filePath={f.filePath}
+        content={f.content}
+        fileType={f.fileType}
+        terminals={base.terminals}
+        sourceTerminalId={f.sourceTerminalId}
+        onClose={noop}
+        onSelectFile={noop}
+        onSelectTerminal={noop}
+        onCloseTerminal={noop}
+      />
+      {steps.length > 0 && <FixtureDriver steps={steps} />}
+    </>
+  );
+}
+
+const FILE_SCREENS = new Set(['file-panel', 'file-temp-view']);
+
 // ── M2 B3 hosts ──
 
 const MB_SCREENS = new Set(['menu-bar', 'user-dropdown']);
@@ -702,12 +879,14 @@ function FixtureApp(): JSX.Element | null {
   const isModalScreen = MODAL_SCREENS.has(screen);
   const isMbScreen = MB_SCREENS.has(screen);
   const isPanelScreen = PANEL_SCREENS.has(screen);
+  const isFileScreen = FILE_SCREENS.has(screen);
   if (
     screen !== 'terminal-grid' &&
     !isPopoverScreen &&
     !isModalScreen &&
     !isMbScreen &&
-    !isPanelScreen
+    !isPanelScreen &&
+    !isFileScreen
   ) {
     console.error(`[fixture] 未登记的屏: ${screen}（fixture-main.tsx）`);
     return null;
@@ -730,6 +909,22 @@ function FixtureApp(): JSX.Element | null {
   // B3 配置面板簇：生产 overlay 容器 + 面板组件（无 menubar 底图，裁决#4 单组件挂载）
   if (isPanelScreen) {
     return wrap(<FixturePanelHost key={fx.id} fx={fx} />);
+  }
+
+  // B4 file 簇：file-panel 带 base 网格底图；file-temp-view 满幅自盖（base 仅供右栏终端内容）
+  if (isFileScreen) {
+    const fileBase = fx.base;
+    if (!fileBase || !fileBase.terminals) {
+      console.error(`[fixture] ${fx.id}: 缺底图数据（base.terminals）`);
+      return null;
+    }
+    return wrap(
+      screen === 'file-panel' ? (
+        <FixtureFilePanelHost key={fx.id} fx={fx} base={fileBase} />
+      ) : (
+        <FixtureFtvHost key={fx.id} fx={fx} base={fileBase} />
+      ),
+    );
   }
 
   // B3 menu-bar/user-dropdown：base 底图（terminalCount 数据源）+ 顶层 MenuBar

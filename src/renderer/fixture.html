@@ -229,7 +229,8 @@
           return Promise.resolve({
             success: true,
             data: dirs[p].map(function (e) {
-              return { name: e.name, isDirectory: e.isDirectory, path: p + '/' + e.name };
+              // B4：size 透传（FilePanel 的 meta 尺寸徽记数据源）；undefined 即无徽记
+              return { name: e.name, isDirectory: e.isDirectory, path: p + '/' + e.name, size: e.size };
             }),
           });
         }
@@ -279,6 +280,10 @@
         }
         if (data.workspace && data.workspace.workspaces) {
           config.savedWorkspaces = data.workspace.workspaces;
+        }
+        // M2 B4（file 簇）：列宽/隐藏文件开关（FilePanel/FileTempView 挂载即 getConfig）
+        if (data.fileConfig) {
+          for (k in data.fileConfig) config[k] = data.fileConfig[k];
         }
         return Promise.resolve({ success: true, data: config });
       };
