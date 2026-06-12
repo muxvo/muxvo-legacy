@@ -15,6 +15,15 @@
  * ws 行内编辑、whats-new 展开）经 FixtureDriver 走生产交互路径（JS click）抵达；
  * close-confirm 纯 props 直挂。providers 随 fixture 以 key 重挂，保证逐场景状态零残留
  * （locale/panel state 不跨 fixture 泄漏）。
+ *
+ * M2 B3（menu-bar/user-dropdown + 四配置面板）：
+ * - menu-bar 屏非 overlay——与生产同构顶层渲染 .app > MenuBar + app-content(TerminalGrid 底图)，
+ *   AuthProvider 包裹（AuthButton 触达 useAuth；登录态由 fixture.html auth.getStatus 替身给定）；
+ *   user-dropdown 屏 = menu-bar + FixtureDriver 点 trigger 打开（生产入口）。
+ * - 面板屏挂在生产 overlay 容器（App.tsx:281-306 同款 .{skills,mcp,hooks,plugins}-panel-overlay），
+ *   数据走 fixture.html 的 config/fs 替身；选中/表单态经 FixtureDriver 走生产 click 路径。
+ * - FilePanel.css 显式 import：生产 App 恒引入（FilePanel 组件），fixture 页不挂 FilePanel，
+ *   但 SkillFileTree 的 .file-item 共享其样式，不引则与生产渲染不一致（dev-only，零生产改动）。
  */
 
 import { useEffect, useState } from 'react';
@@ -33,7 +42,13 @@ import { SettingsModal } from './components/settings/SettingsModal';
 import { LoginModal } from './components/auth/LoginModal';
 import { WorkspaceManagerModal } from './components/workspace/WorkspaceManagerModal';
 import { WhatsNewModal } from './components/whats-new/WhatsNewModal';
+import { MenuBar } from './components/layout/MenuBar';
+import { SkillsPanel } from './components/skill/SkillsPanel';
+import { McpPanel } from './components/mcp/McpPanel';
+import { HooksPanel } from './components/hook/HooksPanel';
+import { PluginPanel } from './components/plugin/PluginPanel';
 import './App.css';
+import './components/file/FilePanel.css'; // B3：.file-item 共享样式（头注释，生产恒引入）
 
 interface FixtureTerminal {
   id: string;
@@ -91,6 +106,40 @@ interface FixtureData extends Partial<FixtureBase> {
   };
   /** close-confirm-dialog 屏 payload */
   closeConfirm?: { terminalId: string; processName: string };
+  /** B3 menu-bar/user-dropdown 屏 payload（auth/update 由 fixture.html 替身消费） */
+  auth?: { username: string; email?: string; provider: string; avatarDataUri: string } | null;
+  update?:
+    | { state: 'downloading'; percent: number; transferred: number; total: number; bytesPerSecond: number }
+    | { state: 'error' }
+    | null;
+  /** B3 skills-panel 屏 payload（files/dirs 喂 fs.readFile/readDir 替身） */
+  skills?: {
+    items: { name: string; path: string; source?: string; level?: string; desc?: string }[];
+    selected: string | null;
+    sourceMode?: boolean;
+    dirty?: boolean;
+    dirtyValue?: string;
+  };
+  files?: Record<string, string>;
+  dirs?: Record<string, { name: string; isDirectory: boolean }[]>;
+  /** B3 mcp-panel 屏 payload（servers 由替身按 scope 反拼配置文件） */
+  mcp?: {
+    servers: { name: string; scope: string; [k: string]: unknown }[];
+    selected: string | null;
+    form?: boolean;
+  };
+  /** B3 hooks-panel 屏 payload（settings 即 getSettings 替身答案） */
+  hooks?: {
+    settings: { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]> };
+    selectedId: string | null;
+    form?: boolean;
+  };
+  /** B3 plugins-panel 屏 payload（error 非空 = 替身 reject 定值 Error） */
+  plugins?: {
+    error: string | null;
+    items: { id: string; installPath: string; [k: string]: unknown }[];
+    selectedId: string | null;
+  };
 }
 
 const noop = () => {};
@@ -123,9 +172,33 @@ const MODAL_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
   'close-confirm-dialog': () => '.close-confirm-dialog',
 };
 
+/**
+ * B3 屏就位选择器：同 B2 思路——以目标终态元素为键（驱动链 click/注值任一环没走到 →
+ * capture 超时红）。skills 选中态等 wysiwyg 首个 h1（SKILL.md 异步加载 + tiptap 渲染终点）。
+ */
+const B3_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
+  'menu-bar': (fx) =>
+    fx.update ? '.update-progress' : fx.auth ? '.user-dropdown__trigger' : '.menu-bar',
+  'user-dropdown': () => '.user-dropdown__menu',
+  'skills-panel': (fx) =>
+    fx.skills?.dirty
+      ? '.skills-panel__editor-dirty'
+      : fx.skills?.selected
+        ? '.markdown-wysiwyg .tiptap h1'
+        : '.skill-list__empty',
+  'mcp-panel': (fx) => (fx.mcp?.form ? '.mcp-panel__form' : '.mcp-panel__detail'),
+  'hooks-panel': (fx) => (fx.hooks?.form ? '.hooks-panel__form' : '.hooks-panel__detail'),
+  'plugins-panel': (fx) =>
+    fx.plugins?.error ? '.plugin-panel__empty' : '.plugin-panel__detail',
+};
+
 function readySelectorFor(fx: FixtureData): string | undefined {
   const screen = fx.screen ?? '';
-  return MODAL_READY_SELECTOR[screen]?.(fx) ?? POPOVER_READY_SELECTOR[screen];
+  return (
+    MODAL_READY_SELECTOR[screen]?.(fx) ??
+    B3_READY_SELECTOR[screen]?.(fx) ??
+    POPOVER_READY_SELECTOR[screen]
+  );
 }
 
 /** 与生产同构打开浮层：fonts.ready 后轮询入口元素（worktree 按钮异步出现）并 JS click */
@@ -248,6 +321,25 @@ function setInputValue(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
   setter.call(input, value);
   input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/** textarea 版原生 setter 注值（B3 sk-dirty：source 模式编辑区走 onChange 置 dirty） */
+function setTextareaValue(el: HTMLTextAreaElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype,
+    'value',
+  )!.set!;
+  setter.call(el, value);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/** 在 NodeList 中找文本恰好等于 text 的元素（B3：按显示名定位列表项，与人眼选择同构） */
+function findByText(selector: string, text: string): HTMLElement | null {
+  return (
+    Array.from(document.querySelectorAll<HTMLElement>(selector)).find(
+      (el) => (el.textContent ?? '').trim() === text,
+    ) ?? null
+  );
 }
 
 /** login-modal 宿主：AuthProvider 内 dispatch 打开；mode=login 走条款守卫真实路径两连点 */
@@ -388,6 +480,186 @@ function FixtureModalHost({ fx }: { fx: FixtureData }): JSX.Element | null {
 
 const MODAL_SCREENS = new Set(Object.keys(MODAL_READY_SELECTOR));
 
+// ── M2 B3 hosts ──
+
+const MB_SCREENS = new Set(['menu-bar', 'user-dropdown']);
+const PANEL_SCREENS = new Set(['skills-panel', 'mcp-panel', 'hooks-panel', 'plugins-panel']);
+
+/**
+ * menu-bar / user-dropdown 屏宿主：与生产同构（App.tsx:248-268）——.app 顶层 MenuBar +
+ * app-content 网格底图；登录态由 auth.getStatus 替身在 AuthProvider 挂载时灌入。
+ * user-dropdown 屏经 FixtureDriver 点生产入口 trigger 打开（头像异步出现，driver 轮询）。
+ */
+function FixtureMenuBarHost({ fx, base }: { fx: FixtureData; base: FixtureBase }): JSX.Element {
+  const dropdownSteps: DriverStep[] = [
+    { find: () => document.querySelector('.user-dropdown__trigger'), act: click },
+  ];
+  return (
+    <AuthProvider>
+      <div className="app">
+        <MenuBar
+          viewMode={base.viewMode}
+          onBackToTiling={noop}
+          terminalCount={base.terminals.length}
+        />
+        <main className="app-content">
+          <TerminalGrid
+            key={fx.id}
+            terminals={base.terminals}
+            viewMode={base.viewMode}
+            focusedId={base.focusedId}
+            selectedId={base.selectedId}
+            activeSidebarId={base.activeSidebarId}
+            maxReached={base.maxReached}
+            onAddTerminal={noop}
+            onClose={noop}
+            onRename={noop}
+            onReorder={noop}
+            onDoubleClick={noop}
+            onFocusTerminal={noop}
+            onSidebarClick={noop}
+            onSidebarActivate={noop}
+            onSidebarDeactivate={noop}
+            onClick={noop}
+            onBackToTiling={noop}
+          />
+        </main>
+      </div>
+      {fx.screen === 'user-dropdown' && <FixtureDriver steps={dropdownSteps} />}
+    </AuthProvider>
+  );
+}
+
+/** hooks 展平序 = 事件插入序 → 组序 → 处理器序（useHookConfig flattenHooks 同构），求 DOM 项下标 */
+function hookItemIndex(
+  settings: NonNullable<FixtureData['hooks']>['settings'],
+  selectedId: string,
+): number {
+  let idx = 0;
+  for (const [event, groups] of Object.entries(settings.hooks)) {
+    for (let gi = 0; gi < groups.length; gi++) {
+      for (let hi = 0; hi < groups[gi].hooks.length; hi++) {
+        if (`global:${event}:${gi}:${hi}` === selectedId) return idx;
+        idx++;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * 配置面板簇宿主：生产 overlay 容器（App.tsx:281-306 同款类名）+ 面板组件；
+ * 数据全走 fixture.html 替身；选中/编辑态经 FixtureDriver 走生产 click 路径。
+ */
+function FixturePanelHost({ fx }: { fx: FixtureData }): JSX.Element | null {
+  switch (fx.screen) {
+    case 'skills-panel': {
+      const sk = fx.skills;
+      const selectedName = sk?.items.find((i) => i.path === sk.selected)?.name;
+      const steps: DriverStep[] = [];
+      if (selectedName) {
+        steps.push({
+          find: () => findByText('.skill-list__item-name', selectedName),
+          act: click,
+        });
+      }
+      if (sk?.sourceMode) {
+        // 选中后 SKILL.md 异步加载，mode 钮（仅 markdown 有）出现即点 → source 模式
+        steps.push({
+          find: () => document.querySelector('.skills-panel__editor-mode-btn'),
+          act: click,
+        });
+      }
+      if (sk?.dirty && sk.dirtyValue != null) {
+        steps.push({
+          find: () => document.querySelector('.skills-panel__editor-body textarea'),
+          act: (el) => setTextareaValue(el as HTMLTextAreaElement, sk.dirtyValue!),
+        });
+      }
+      return (
+        <div className="skills-panel-overlay">
+          <SkillsPanel />
+          {steps.length > 0 && <FixtureDriver steps={steps} />}
+        </div>
+      );
+    }
+
+    case 'mcp-panel': {
+      const mc = fx.mcp;
+      const steps: DriverStep[] = [];
+      if (mc?.selected) {
+        steps.push({
+          find: () => findByText('.mcp-panel__item-name', mc.selected!),
+          act: (el) => (el.closest('.mcp-panel__item') as HTMLElement | null)?.click(),
+        });
+      }
+      if (mc?.form) {
+        steps.push({
+          find: () => document.querySelector('.mcp-panel__detail-actions .mcp-panel__btn--primary'),
+          act: click,
+        });
+      }
+      return (
+        <div className="mcp-panel-overlay">
+          <McpPanel />
+          {steps.length > 0 && <FixtureDriver steps={steps} />}
+        </div>
+      );
+    }
+
+    case 'hooks-panel': {
+      const hk = fx.hooks;
+      const steps: DriverStep[] = [];
+      if (hk?.selectedId) {
+        const idx = hookItemIndex(hk.settings, hk.selectedId);
+        steps.push({
+          find: () =>
+            idx >= 0
+              ? (document.querySelectorAll<HTMLElement>('.hooks-panel__item')[idx] ?? null)
+              : null,
+          act: click,
+        });
+      }
+      if (hk?.form) {
+        steps.push({
+          find: () =>
+            document.querySelector('.hooks-panel__detail-actions .hooks-panel__btn--primary'),
+          act: click,
+        });
+      }
+      return (
+        <div className="hooks-panel-overlay">
+          <HooksPanel />
+          {steps.length > 0 && <FixtureDriver steps={steps} />}
+        </div>
+      );
+    }
+
+    case 'plugins-panel': {
+      const pl = fx.plugins;
+      const steps: DriverStep[] = [];
+      const selectedName = pl?.items.find((i) => i.id === pl.selectedId)?.name as
+        | string
+        | undefined;
+      if (selectedName) {
+        steps.push({
+          find: () => findByText('.plugin-panel__item-name', selectedName),
+          act: (el) => (el.closest('.plugin-panel__item') as HTMLElement | null)?.click(),
+        });
+      }
+      return (
+        <div className="plugins-panel-overlay">
+          <PluginPanel />
+          {steps.length > 0 && <FixtureDriver steps={steps} />}
+        </div>
+      );
+    }
+
+    default:
+      return null;
+  }
+}
+
 function FixtureApp(): JSX.Element | null {
   const [fx, setFx] = useState<FixtureData | null>(null);
 
@@ -428,7 +700,15 @@ function FixtureApp(): JSX.Element | null {
   const screen = fx.screen ?? 'terminal-grid';
   const isPopoverScreen = screen in POPOVER_READY_SELECTOR;
   const isModalScreen = MODAL_SCREENS.has(screen);
-  if (screen !== 'terminal-grid' && !isPopoverScreen && !isModalScreen) {
+  const isMbScreen = MB_SCREENS.has(screen);
+  const isPanelScreen = PANEL_SCREENS.has(screen);
+  if (
+    screen !== 'terminal-grid' &&
+    !isPopoverScreen &&
+    !isModalScreen &&
+    !isMbScreen &&
+    !isPanelScreen
+  ) {
     console.error(`[fixture] 未登记的屏: ${screen}（fixture-main.tsx）`);
     return null;
   }
@@ -445,6 +725,21 @@ function FixtureApp(): JSX.Element | null {
   // B2 modal 簇：单组件挂载（screens.json 裁决#4），无网格底图，页面底色即 body --bg-primary
   if (isModalScreen) {
     return wrap(<FixtureModalHost fx={fx} />);
+  }
+
+  // B3 配置面板簇：生产 overlay 容器 + 面板组件（无 menubar 底图，裁决#4 单组件挂载）
+  if (isPanelScreen) {
+    return wrap(<FixturePanelHost key={fx.id} fx={fx} />);
+  }
+
+  // B3 menu-bar/user-dropdown：base 底图（terminalCount 数据源）+ 顶层 MenuBar
+  if (isMbScreen) {
+    const mbBase = fx.base;
+    if (!mbBase || !mbBase.terminals) {
+      console.error(`[fixture] ${fx.id}: 缺底图数据（base.terminals）`);
+      return null;
+    }
+    return wrap(<FixtureMenuBarHost key={fx.id} fx={fx} base={mbBase} />);
   }
 
   // terminal-grid：顶层字段即底图；popover 屏：底图在 fx.base

@@ -76,6 +76,44 @@
         fs: {
           showFileMenu: function () {},
         },
+        // M2 B3（配置面板簇）：config.* 一组替身，全部由 fixture 按屏 payload 单一数据源驱动
+        config: {
+          getResources: function (type) {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            if (type === 'skills' && data && data.skills && data.skills.items) {
+              return Promise.resolve({
+                resources: data.skills.items.map(function (i) {
+                  return { name: i.name, path: i.path, source: i.source, level: i.level };
+                }),
+              });
+            }
+            return Promise.resolve({ resources: [] });
+          },
+          getResourceContent: function (p) {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var files = (data && data.files) || {};
+            if (Object.prototype.hasOwnProperty.call(files, p)) {
+              return Promise.resolve({ content: files[p] });
+            }
+            return Promise.reject(new Error('fixture: no file ' + p));
+          },
+          onResourceChange: function () { return function () {}; },
+          // hooks-panel 读 settings.hooks；plugin-panel 读 settings.enabledPlugins
+          getSettings: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__ || {};
+            var settings = {};
+            if (data.hooks && data.hooks.settings && data.hooks.settings.hooks) {
+              settings.hooks = data.hooks.settings.hooks;
+            }
+            if (data.plugins && data.plugins.items) {
+              var enabled = {};
+              data.plugins.items.forEach(function (i) { enabled[i.id] = !!i.enabled; });
+              settings.enabledPlugins = enabled;
+            }
+            return Promise.resolve({ settings: settings });
+          },
+          saveSettings: function () { return Promise.resolve({ success: true }); },
+        },
         terminal: {
           list: function () { return Promise.resolve({ success: true, data: [] }); },
           onExit: function () { return function () {}; },
@@ -89,13 +127,146 @@
           setSessionName: function () { return Promise.resolve({ success: true }); },
         },
         // M2 B2（modal 簇）：AuthContext 挂载即调 getStatus / 订阅两推送（AuthContext.tsx:100-137）
+        // M2 B3：fixture.auth 非空 → 登录态（头像一律 data-URI，确定性铁律）；缺省未登录（B2 行为不变）
         auth: {
           getStatus: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var a = data && data.auth;
+            if (a) {
+              return Promise.resolve({
+                success: true,
+                data: {
+                  loggedIn: true,
+                  user: {
+                    username: a.username,
+                    email: a.email,
+                    avatarUrl: a.avatarDataUri,
+                    provider: a.provider,
+                  },
+                },
+              });
+            }
             return Promise.resolve({ success: true, data: { loggedIn: false } });
           },
           onSessionExpired: function () { return function () {}; },
           onStatusChange: function () { return function () {}; },
         },
+      };
+      // ── M2 B3 fs 替身：files/dirs 字典 + mcp/plugins 按 payload 反拼配置文件答案 ──
+      // mcp：useMcpConfig 读 4 个全局配置路径（useMcpConfig.ts:90-94），按 scope 反拼 JSON
+      window.__fxMcpFileAnswer = function (p) {
+        var data = window.__MUXVO_FIXTURE_DATA__;
+        if (!data || !data.mcp || !data.mcp.servers) return null;
+        var home = (data.homePath) || '/Users/rl';
+        var scopeByPath = {};
+        scopeByPath[home + '/.claude.json'] = 'global';
+        scopeByPath[home + '/Library/Application Support/Claude/claude_desktop_config.json'] = 'desktop';
+        scopeByPath[home + '/.gemini/settings.json'] = 'gemini';
+        var scope = scopeByPath[p];
+        if (!scope) return null;
+        var mcpServers = {};
+        var found = false;
+        data.mcp.servers.forEach(function (s) {
+          if (s.scope !== scope) return;
+          found = true;
+          var entry = {};
+          if (s.command) entry.command = s.command;
+          if (s.args) entry.args = s.args;
+          if (s.url) entry.url = s.url;
+          if (s.headers) entry.headers = s.headers;
+          if (s.env) entry.env = s.env;
+          mcpServers[s.name] = entry;
+        });
+        if (!found) return null;
+        return JSON.stringify({ mcpServers: mcpServers });
+      };
+      // plugins：usePluginConfig 读 installed_plugins.json + manifest；error 态 reject 定值 Error
+      window.__fxPluginsFileAnswer = function (p) {
+        var data = window.__MUXVO_FIXTURE_DATA__;
+        if (!data || !data.plugins) return null;
+        var home = (data.homePath) || '/Users/rl';
+        if (p === home + '/.claude/plugins/installed_plugins.json') {
+          if (data.plugins.error) return { reject: new Error(data.plugins.error) };
+          var map = {};
+          (data.plugins.items || []).forEach(function (i) {
+            map[i.id] = [{
+              version: i.version,
+              scope: i.scope,
+              installPath: i.installPath,
+              installedAt: i.installedAt,
+              lastUpdated: i.lastUpdated,
+            }];
+          });
+          return JSON.stringify({ version: 1, plugins: map });
+        }
+        var items = data.plugins.items || [];
+        for (var i = 0; i < items.length; i++) {
+          if (p === items[i].installPath + '/.claude-plugin/plugin.json' && items[i].manifest) {
+            return JSON.stringify(items[i].manifest);
+          }
+        }
+        return null;
+      };
+      window.api.fs.readFile = function (p) {
+        var data = window.__MUXVO_FIXTURE_DATA__ || {};
+        var files = data.files || {};
+        if (Object.prototype.hasOwnProperty.call(files, p)) {
+          return Promise.resolve({ success: true, data: { content: files[p] } });
+        }
+        var mcp = window.__fxMcpFileAnswer(p);
+        if (mcp !== null) return Promise.resolve({ success: true, data: { content: mcp } });
+        var pl = window.__fxPluginsFileAnswer(p);
+        if (pl && pl.reject) return Promise.reject(pl.reject);
+        if (typeof pl === 'string') return Promise.resolve({ success: true, data: { content: pl } });
+        return Promise.resolve({ success: false });
+      };
+      window.api.fs.writeFile = function () { return Promise.resolve({ success: true }); };
+      // readDir：skills 文件树走 dirs 字典；plugin contents 扫描按 payload 反拼目录列表
+      window.api.fs.readDir = function (p) {
+        var data = window.__MUXVO_FIXTURE_DATA__ || {};
+        var dirs = data.dirs || {};
+        if (Object.prototype.hasOwnProperty.call(dirs, p)) {
+          return Promise.resolve({
+            success: true,
+            data: dirs[p].map(function (e) {
+              return { name: e.name, isDirectory: e.isDirectory, path: p + '/' + e.name };
+            }),
+          });
+        }
+        var items = (data.plugins && data.plugins.items) || [];
+        for (var i = 0; i < items.length; i++) {
+          var c = items[i].contents;
+          if (!c) continue;
+          var base = items[i].installPath;
+          var listing = null;
+          if (p === base + '/commands') listing = c.commands.map(function (n) { return { name: n + '.md', isDirectory: false }; });
+          else if (p === base + '/skills') listing = c.skills.map(function (n) { return { name: n, isDirectory: true }; });
+          else if (p === base + '/hooks') listing = c.hooks.map(function (n) { return { name: n, isDirectory: false }; });
+          else if (p === base + '/agents') listing = c.agents.map(function (n) { return { name: n + '.md', isDirectory: false }; });
+          if (listing) {
+            return Promise.resolve({
+              success: true,
+              data: listing.map(function (e) { return { name: e.name, isDirectory: e.isDirectory, path: p + '/' + e.name }; }),
+            });
+          }
+        }
+        return Promise.resolve({ success: false });
+      };
+      // ── M2 B3 更新进度替身：订阅即同步回调冻结状态（done 态 fade 动画中帧，spec 跳过不提供）──
+      window.api.app.onUpdateDownloading = function (callback) {
+        var data = window.__MUXVO_FIXTURE_DATA__;
+        var u = data && data.update;
+        if (u && u.state === 'downloading') {
+          callback({ percent: u.percent, bytesPerSecond: u.bytesPerSecond, transferred: u.transferred, total: u.total });
+        }
+        return function () {};
+      };
+      window.api.app.onUpdateDownloaded = function () { return function () {}; };
+      window.api.app.onUpdateError = function (callback) {
+        var data = window.__MUXVO_FIXTURE_DATA__;
+        var u = data && data.update;
+        if (u && u.state === 'error') callback();
+        return function () {};
       };
       // M2 B2：getConfig 改读 fixture（SettingsModal 读 settings.config；
       // WorkspaceManagerModal 读 savedWorkspaces）；无 fixture 数据时维持空对象（B1 行为不变）
