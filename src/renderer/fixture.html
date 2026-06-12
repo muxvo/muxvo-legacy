@@ -88,9 +88,47 @@
         chat: {
           setSessionName: function () { return Promise.resolve({ success: true }); },
         },
+        // M2 B2（modal 簇）：AuthContext 挂载即调 getStatus / 订阅两推送（AuthContext.tsx:100-137）
+        auth: {
+          getStatus: function () {
+            return Promise.resolve({ success: true, data: { loggedIn: false } });
+          },
+          onSessionExpired: function () { return function () {}; },
+          onStatusChange: function () { return function () {}; },
+        },
       };
-      window.api.app.getConfig = function () { return Promise.resolve({ success: true, data: {} }); };
+      // M2 B2：getConfig 改读 fixture（SettingsModal 读 settings.config；
+      // WorkspaceManagerModal 读 savedWorkspaces）；无 fixture 数据时维持空对象（B1 行为不变）
+      window.api.app.getConfig = function () {
+        var data = window.__MUXVO_FIXTURE_DATA__ || {};
+        var config = {};
+        var k;
+        if (data.settings && data.settings.config) {
+          for (k in data.settings.config) config[k] = data.settings.config[k];
+        }
+        if (data.workspace && data.workspace.workspaces) {
+          config.savedWorkspaces = data.workspace.workspaces;
+        }
+        return Promise.resolve({ success: true, data: config });
+      };
+      window.api.app.saveConfig = function () { return Promise.resolve({ success: true }); };
       window.api.app.getPreferences = function () { return Promise.resolve({ success: true, data: {} }); };
+      window.api.app.savePreferences = function () { return Promise.resolve({ success: true }); };
+      window.api.app.checkForUpdate = function () { return Promise.resolve({ success: true }); };
+      window.api.app.downloadUpdate = function () { return Promise.resolve({ success: true }); };
+      // settings-modal：订阅即同步回调（fixture settings.update 非 null → 'available' 态确定性可截）
+      window.api.app.onUpdateAvailable = function (callback) {
+        var data = window.__MUXVO_FIXTURE_DATA__;
+        var update = data && data.settings && data.settings.update;
+        if (update) callback({ version: update.version, releaseDate: '2026-06-01' });
+        return function () {};
+      };
+      // whats-new-modal：缺此方法会 TypeError 崩（WhatsNewModal.tsx:25 直接 .then）
+      window.api.app.getReleaseNotes = function () {
+        var data = window.__MUXVO_FIXTURE_DATA__;
+        var entries = (data && data.whatsNew && data.whatsNew.entries) || [];
+        return Promise.resolve(entries);
+      };
     </script>
   </head>
   <body>
