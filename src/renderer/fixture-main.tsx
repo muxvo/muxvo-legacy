@@ -18,6 +18,8 @@ import './App.css';
 interface FixtureData {
   id: string;
   theme: 'dark' | 'light';
+  /** M2 多屏（muxvo 任务4）：缺省 'terminal-grid'；各批次复刻时在下方按屏挂载分支登记 */
+  screen?: string;
   homePath: string;
   viewMode: 'Tiling' | 'Focused';
   focusedId: string | null;
@@ -51,6 +53,14 @@ function FixtureApp(): JSX.Element | null {
   }, []);
 
   if (!fx) return null;
+
+  // M2 多屏分发：未登记的屏报错 + 空渲染（截图必红，防静默空图假绿）。
+  // 新屏挂载分支随 muxvo 各复刻批次在此登记（modal/overlay 屏经 PanelProvider dispatch 打开）。
+  const screen = fx.screen ?? 'terminal-grid';
+  if (screen !== 'terminal-grid') {
+    console.error(`[fixture] 未登记的屏: ${screen}（fixture-main.tsx）`);
+    return null;
+  }
 
   return (
     <div className="app">
