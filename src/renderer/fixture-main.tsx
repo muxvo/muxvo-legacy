@@ -29,6 +29,14 @@
  * + 真 ChatHistoryPanel；数据全走 fixture.html window.api.chat.* 替身（payload 反拼，ISO→ms）；
  * banner 显隐经 localStorage 种子（生产同一开关，挂载前写入）；选中会话/展开工具块/搜索输入
  * 经 FixtureDriver 生产 click/原生 setter 路径；detail 骨架屏 = getSession 永不 resolve 冻结。
+ *
+ * M2 B6（引导簇）：welcome-overlay = 单组件挂载（PanelProvider 内 dispatch SHOW_WELCOME 生产
+ * action）；tour-overlay = **M2 唯一复合宿主特例（muxvo specs/screens.json adjudications #4
+ * 明文授权）**——driver.js spotlight 按真实 DOM rect 挖孔，故宿主复用 menu-bar 屏同构布局
+ * （.app > MenuBar + app-content > TerminalGrid）+ 真 TourOverlay，fonts.ready 后 dispatch
+ * START_TOUR（生产 action）驱动 driver.drive() 落步 1（代表 step 裁决见
+ * muxvo specs/behavior/tour-overlay.md §4）；ready = 气泡 rect + 挖孔 path 连续 30 帧稳定后
+ * 在 .app 打逐 fixture 唯一戳记（B5 稳定闸先例，防截 driver 定位中间态）。
  */
 
 import { useEffect, useState } from 'react';
@@ -48,6 +56,8 @@ import { LoginModal } from './components/auth/LoginModal';
 import { WorkspaceManagerModal } from './components/workspace/WorkspaceManagerModal';
 import { WhatsNewModal } from './components/whats-new/WhatsNewModal';
 import { MenuBar } from './components/layout/MenuBar';
+import { WelcomeOverlay } from './components/tour/WelcomeOverlay';
+import { TourOverlay } from './components/tour/TourOverlay';
 import { ChatHistoryPanel } from './components/chat/ChatHistoryPanel';
 import { SkillsPanel } from './components/skill/SkillsPanel';
 import { FilePanel } from './components/file/FilePanel';
@@ -301,6 +311,16 @@ const CHAT_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
   'chat-history': (fx) => `.chat-history-panel[data-fx-chat-ready="${fx.id}"]`,
 };
 
+/**
+ * B6 引导簇就位选择器：welcome 静态终态元素即可；tour 等 driver.js spotlight 终态——
+ * 气泡 rect + 挖孔 path 连续 30 帧稳定后由宿主 FixtureDriver 打逐 fixture 唯一戳记
+ * （B5 CHAT_READY_SELECTOR 先例：戳记挂在 key={fx.id} 重挂子树内，stale-proof）。
+ */
+const B6_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
+  'welcome-overlay': () => '.welcome-overlay__card',
+  'tour-overlay': (fx) => `.app[data-fx-tour-ready="${fx.id}"]`,
+};
+
 function readySelectorFor(fx: FixtureData): string | undefined {
   const screen = fx.screen ?? '';
   return (
@@ -308,6 +328,7 @@ function readySelectorFor(fx: FixtureData): string | undefined {
     B3_READY_SELECTOR[screen]?.(fx) ??
     B4_READY_SELECTOR[screen]?.(fx) ??
     CHAT_READY_SELECTOR[screen]?.(fx) ??
+    B6_READY_SELECTOR[screen]?.(fx) ??
     POPOVER_READY_SELECTOR[screen]
   );
 }
@@ -789,6 +810,86 @@ function FixtureChatHost({ fx }: { fx: FixtureData }): JSX.Element {
 
 const CHAT_SCREENS = new Set(Object.keys(CHAT_READY_SELECTOR));
 
+// ── M2 B6 hosts（引导簇） ──
+
+/**
+ * welcome-overlay 屏宿主：单组件挂载（裁决#4）——PanelProvider 内 dispatch SHOW_WELCOME
+ * （生产 action，App.tsx:166 同款），overlay 直接盖 body 底色。首启判定实况走
+ * app.getPreferences IPC 而非 localStorage（muxvo specs/behavior/welcome-overlay.md §0），
+ * 替身已有 stub（B2），零扩面。
+ */
+function FixtureWelcomeHost(): JSX.Element {
+  const { dispatch } = usePanelContext();
+  useEffect(() => {
+    dispatch({ type: 'SHOW_WELCOME' });
+  }, [dispatch]);
+  return <WelcomeOverlay />;
+}
+
+/** TourOverlay 的 terminalNames prop：固定空表（重命名推进检测不属视觉；模块级常量防重建） */
+const EMPTY_TERMINAL_NAMES: Record<string, string> = {};
+
+/**
+ * tour-overlay 屏宿主：M2 唯一复合宿主特例（screens.json adjudications #4 授权，文件头注）。
+ * 布局复用 menu-bar 屏宿主（同构 .app > MenuBar + 网格底图）+ 真 TourOverlay；
+ * fonts.ready 后才 dispatch START_TOUR（生产 action）→ driver.drive() 落步 1（代表 step
+ * 裁决见 muxvo specs/behavior/tour-overlay.md §4）——driver.js 气泡 left/top 定位后不重算，
+ * 必须用终版字体度量。ready：气泡 rect + 挖孔 path[d] 连续 30 帧稳定后在 .app 打逐 fixture
+ * 唯一戳记（B5 稳定闸先例），不稳不打标 → capture 超时红，绝不截 driver 定位中间态。
+ */
+function FixtureTourHost({ fx, base }: { fx: FixtureData; base: FixtureBase }): JSX.Element {
+  const { dispatch } = usePanelContext();
+  useEffect(() => {
+    let cancelled = false;
+    document.fonts.ready.then(() => {
+      if (!cancelled) dispatch({ type: 'START_TOUR' });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch]);
+
+  let stableFrames = 0;
+  let prevSig = '';
+  const steps: DriverStep[] = [
+    {
+      find: () => {
+        const popover = document.querySelector('.driver-popover');
+        const path = document.querySelector('.driver-overlay path');
+        if (!popover || !path) {
+          stableFrames = 0;
+          prevSig = '';
+          return null;
+        }
+        const r = popover.getBoundingClientRect();
+        const sig = `${path.getAttribute('d')}|${r.x},${r.y},${r.width},${r.height}`;
+        if (sig === prevSig) {
+          stableFrames++;
+        } else {
+          stableFrames = 0;
+          prevSig = sig;
+        }
+        return stableFrames >= 30 ? document.querySelector<HTMLElement>('.app') : null;
+      },
+      act: (el) => el.setAttribute('data-fx-tour-ready', fx.id),
+    },
+  ];
+
+  return (
+    <>
+      <FixtureMenuBarHost fx={fx} base={base} />
+      <TourOverlay
+        terminalCount={base.terminals.length}
+        viewMode={base.viewMode}
+        terminalNames={EMPTY_TERMINAL_NAMES}
+      />
+      <FixtureDriver steps={steps} />
+    </>
+  );
+}
+
+const B6_SCREENS = new Set(Object.keys(B6_READY_SELECTOR));
+
 // ── M2 B3 hosts ──
 
 const MB_SCREENS = new Set(['menu-bar', 'user-dropdown']);
@@ -1013,6 +1114,7 @@ function FixtureApp(): JSX.Element | null {
   const isPanelScreen = PANEL_SCREENS.has(screen);
   const isFileScreen = FILE_SCREENS.has(screen);
   const isChatScreen = CHAT_SCREENS.has(screen);
+  const isB6Screen = B6_SCREENS.has(screen);
   if (
     screen !== 'terminal-grid' &&
     !isPopoverScreen &&
@@ -1020,7 +1122,8 @@ function FixtureApp(): JSX.Element | null {
     !isMbScreen &&
     !isPanelScreen &&
     !isFileScreen &&
-    !isChatScreen
+    !isChatScreen &&
+    !isB6Screen
   ) {
     console.error(`[fixture] 未登记的屏: ${screen}（fixture-main.tsx）`);
     return null;
@@ -1043,6 +1146,19 @@ function FixtureApp(): JSX.Element | null {
   // B3 配置面板簇：生产 overlay 容器 + 面板组件（无 menubar 底图，裁决#4 单组件挂载）
   if (isPanelScreen) {
     return wrap(<FixturePanelHost key={fx.id} fx={fx} />);
+  }
+
+  // B6 引导簇：welcome 单组件挂载；tour 复合宿主特例（裁决#4 授权，文件头注）
+  if (isB6Screen) {
+    if (screen === 'welcome-overlay') {
+      return wrap(<FixtureWelcomeHost key={fx.id} />);
+    }
+    const tourBase = fx.base;
+    if (!tourBase || !tourBase.terminals) {
+      console.error(`[fixture] ${fx.id}: 缺底图数据（base.terminals）`);
+      return null;
+    }
+    return wrap(<FixtureTourHost key={fx.id} fx={fx} base={tourBase} />);
   }
 
   // B5 chat 簇：生产 overlay 容器 + ChatHistoryPanel（裁决#4 单组件挂载，无底图）
