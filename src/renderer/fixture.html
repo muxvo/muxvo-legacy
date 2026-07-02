@@ -123,8 +123,70 @@
           acknowledgeWaiting: function () {},
           setName: function () { return Promise.resolve({ success: true }); },
         },
+        // M2 B5（chat 簇）：chat.* 替身按 fixture.chat payload 反拼 IPC 答案。
+        // 时间字段 payload 一律 ISO 字符串（确定性铁律），此处 Date.parse 转 ms 还原生产形状。
         chat: {
           setSessionName: function () { return Promise.resolve({ success: true }); },
+          getProjects: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var c = (data && data.chat) || {};
+            var projects = (c.projects || []).map(function (p) {
+              return {
+                projectHash: p.projectHash,
+                displayPath: p.displayPath,
+                displayName: p.displayName,
+                sessionCount: p.sessionCount,
+                totalSize: p.totalSize,
+                lastActivity: Date.parse(p.lastActivity),
+                source: p.source,
+              };
+            });
+            return Promise.resolve({ projects: projects });
+          },
+          getSessions: function (hash) {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var c = (data && data.chat) || {};
+            var sessions = (c.sessions || [])
+              .filter(function (s) { return hash === '__all__' || s.projectHash === hash; })
+              .map(function (s) {
+                return {
+                  sessionId: s.sessionId,
+                  projectHash: s.projectHash,
+                  title: s.title,
+                  startedAt: s.startedAt,
+                  lastModified: Date.parse(s.lastModified),
+                  fileSize: s.fileSize,
+                  source: s.source,
+                  customTitle: s.customTitle,
+                  cwd: s.cwd,
+                  worktreeLabel: s.worktreeLabel,
+                };
+              });
+            return Promise.resolve({ sessions: sessions });
+          },
+          getSession: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var c = (data && data.chat) || {};
+            // detailPending：永不 resolve → loading 骨架屏冻结（chat-skeleton 终态）
+            if (c.detailPending) return new Promise(function () {});
+            return Promise.resolve({ messages: c.messages || [] });
+          },
+          search: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var c = (data && data.chat) || {};
+            var results = ((c.search && c.search.results) || []).map(function (r) {
+              return { projectHash: r.projectHash, sessionId: r.sessionId, snippet: r.snippet, timestamp: r.timestamp };
+            });
+            return Promise.resolve({ results: results });
+          },
+          getArchiveEnabled: function () {
+            var data = window.__MUXVO_FIXTURE_DATA__;
+            var c = (data && data.chat) || {};
+            return Promise.resolve(c.archiveEnabled !== false);
+          },
+          setArchiveEnabled: function () { return Promise.resolve(); },
+          onArchiveProgress: function () { return function () {}; },
+          onSessionUpdate: function () { return function () {}; },
         },
         // M2 B2（modal 簇）：AuthContext 挂载即调 getStatus / 订阅两推送（AuthContext.tsx:100-137）
         // M2 B3：fixture.auth 非空 → 登录态（头像一律 data-URI，确定性铁律）；缺省未登录（B2 行为不变）

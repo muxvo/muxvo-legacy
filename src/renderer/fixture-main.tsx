@@ -24,6 +24,11 @@
  *   数据走 fixture.html 的 config/fs 替身；选中/表单态经 FixtureDriver 走生产 click 路径。
  * - FilePanel.css 显式 import：生产 App 恒引入（FilePanel 组件），fixture 页不挂 FilePanel，
  *   但 SkillFileTree 的 .file-item 共享其样式，不引则与生产渲染不一致（dev-only，零生产改动）。
+ *
+ * M2 B5（chat 簇）：chat-history 屏 = 生产 .chat-history-overlay 宿主（App.tsx:273-278 同款）
+ * + 真 ChatHistoryPanel；数据全走 fixture.html window.api.chat.* 替身（payload 反拼，ISO→ms）；
+ * banner 显隐经 localStorage 种子（生产同一开关，挂载前写入）；选中会话/展开工具块/搜索输入
+ * 经 FixtureDriver 生产 click/原生 setter 路径；detail 骨架屏 = getSession 永不 resolve 冻结。
  */
 
 import { useEffect, useState } from 'react';
@@ -43,6 +48,7 @@ import { LoginModal } from './components/auth/LoginModal';
 import { WorkspaceManagerModal } from './components/workspace/WorkspaceManagerModal';
 import { WhatsNewModal } from './components/whats-new/WhatsNewModal';
 import { MenuBar } from './components/layout/MenuBar';
+import { ChatHistoryPanel } from './components/chat/ChatHistoryPanel';
 import { SkillsPanel } from './components/skill/SkillsPanel';
 import { FilePanel } from './components/file/FilePanel';
 import { FileTempView } from './components/file/FileTempView';
@@ -166,6 +172,44 @@ interface FixtureData extends Partial<FixtureBase> {
     items: { id: string; installPath: string; [k: string]: unknown }[];
     selectedId: string | null;
   };
+  /** B5 chat-history 屏 payload（projects/sessions/messages/search 由 window.api.chat 替身
+   *  消费；时间一律 ISO 字符串，替身 Date.parse 转 ms——确定性铁律） */
+  chat?: {
+    /** banner 显隐（localStorage 种子：false = 预先 dismissed） */
+    banner: boolean;
+    archiveEnabled?: boolean;
+    projects: {
+      projectHash: string;
+      displayPath: string;
+      displayName: string;
+      sessionCount: number;
+      totalSize: number;
+      lastActivity: string;
+      source?: string;
+    }[];
+    sessions: {
+      sessionId: string;
+      projectHash: string;
+      title: string;
+      startedAt: string;
+      lastModified: string;
+      fileSize: number;
+      source?: string;
+      customTitle?: string;
+      cwd?: string;
+      worktreeLabel?: string;
+    }[];
+    /** getSession 替身答案（选中会话的消息流） */
+    messages: { uuid: string; type: string; sessionId: string; cwd: string; timestamp: string; content: unknown }[];
+    /** 非空 = driver 按 lastModified 倒序下标点生产卡片 */
+    selected: string | null;
+    /** true → getSession 永不 resolve → detail 骨架屏冻结 */
+    detailPending?: boolean;
+    /** true → 消息全渲染后 driver 点首个 tool-call header 展开 */
+    expandToolCall?: boolean;
+    /** 非空 = driver 原生 setter 注 query（300ms 防抖后 search 替身答案落地） */
+    search?: { query: string; results: { projectHash: string; sessionId: string; snippet: string; timestamp: string }[] } | null;
+  };
 }
 
 const noop = () => {};
@@ -244,12 +288,26 @@ const B4_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
   },
 };
 
+/**
+ * B5 chat 簇就位选择器：ready 一律等 driver 末步打的 **逐 fixture 唯一戳记**
+ * `data-fx-chat-ready="<fx.id>"`。两条实测教训：
+ * 1) __loadFixture 的 ready 轮询先于 React 提交启动，通用终态类名会命中上一 fixture 的
+ *    残留 DOM（chat-search-hit → chat-search-empty 均有 result-count，截到中间态假绿）；
+ *    唯一戳记 stale-proof（driver 在新树 effect 后运行，只见新 DOM）。
+ * 2) react-virtuoso 偶发整列空渲染（双跑 byte 对比抓到一次）——driver 末步以
+ *    「终态条件连续 30 帧稳定」为闸，不稳不打标 → capture 超时红，绝不静默截空图。
+ */
+const CHAT_READY_SELECTOR: Record<string, (fx: FixtureData) => string> = {
+  'chat-history': (fx) => `.chat-history-panel[data-fx-chat-ready="${fx.id}"]`,
+};
+
 function readySelectorFor(fx: FixtureData): string | undefined {
   const screen = fx.screen ?? '';
   return (
     MODAL_READY_SELECTOR[screen]?.(fx) ??
     B3_READY_SELECTOR[screen]?.(fx) ??
     B4_READY_SELECTOR[screen]?.(fx) ??
+    CHAT_READY_SELECTOR[screen]?.(fx) ??
     POPOVER_READY_SELECTOR[screen]
   );
 }
@@ -657,6 +715,80 @@ function FixtureFtvHost({ fx, base }: { fx: FixtureData; base: FixtureBase }): J
 
 const FILE_SCREENS = new Set(['file-panel', 'file-temp-view']);
 
+// ── M2 B5 host（chat 簇） ──
+
+/**
+ * chat-history 屏宿主：生产 overlay 容器（App.tsx:273-278 同款 .chat-history-overlay）+
+ * 真 ChatHistoryPanel。数据全走 fixture.html chat 替身；banner 显隐 = 生产同一 localStorage
+ * 开关（须在 ChatHistoryPanel 挂载前种子化，故在宿主渲染体内同步写入——host 随 key={fx.id}
+ * 重挂，逐场景显式覆盖，无跨 fixture 泄漏）；选中卡片按 lastModified 倒序下标点
+ * （SessionList 排序同构，hookItemIndex 先例）；工具块展开以「全部气泡已渲染」为推进闸。
+ */
+function FixtureChatHost({ fx }: { fx: FixtureData }): JSX.Element {
+  const c = fx.chat!;
+  localStorage.setItem('muxvo-archive-notice-dismissed', c.banner ? 'false' : 'true');
+
+  const steps: DriverStep[] = [];
+  if (c.search) {
+    steps.push({
+      find: () => document.querySelector('.search-input-wrap__input'),
+      act: (el) => setInputValue(el as HTMLInputElement, c.search!.query),
+    });
+  }
+  if (c.selected) {
+    const order = [...c.sessions].sort(
+      (a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified),
+    );
+    const idx = order.findIndex((s) => s.sessionId === c.selected);
+    steps.push({
+      find: () =>
+        idx >= 0 ? (document.querySelectorAll<HTMLElement>('.session-card')[idx] ?? null) : null,
+      act: click,
+    });
+  }
+  if (c.expandToolCall && !c.detailPending) {
+    steps.push({
+      // 推进闸：全部气泡渲染后才点展开（防截到消息半载中间态）
+      find: () =>
+        document.querySelectorAll('.message-bubble').length >= c.messages.length
+          ? document.querySelector<HTMLElement>('.tool-call-block__header')
+          : null,
+      act: click,
+    });
+  }
+  // 末步：终态条件连续 30 帧稳定后打逐 fixture 唯一 ready 戳记（CHAT_READY_SELECTOR 头注）。
+  // driver 挂在新 fixture 子树内，effect 于新树提交后才跑——只见新 DOM，天然 stale-proof。
+  const finalCondition: () => boolean = c.detailPending
+    ? () => !!document.querySelector('.session-detail__skeleton')
+    : c.search
+      ? () => !!document.querySelector('.search-input-wrap__result-count')
+      : c.selected
+        ? () =>
+            document.querySelectorAll('.message-bubble').length >= c.messages.length &&
+            (!c.expandToolCall || !!document.querySelector('.tool-call-block__content'))
+        : !c.sessions.length
+          ? () => !!document.querySelector('.session-list__empty')
+          : () => !!document.querySelector('.chat-history-panel');
+  let stableFrames = 0;
+  steps.push({
+    find: () => {
+      stableFrames = finalCondition() ? stableFrames + 1 : 0;
+      return stableFrames >= 30
+        ? document.querySelector<HTMLElement>('.chat-history-panel')
+        : null;
+    },
+    act: (el) => el.setAttribute('data-fx-chat-ready', fx.id),
+  });
+  return (
+    <div className="chat-history-overlay">
+      <ChatHistoryPanel onResumeSession={noop} />
+      {steps.length > 0 && <FixtureDriver steps={steps} />}
+    </div>
+  );
+}
+
+const CHAT_SCREENS = new Set(Object.keys(CHAT_READY_SELECTOR));
+
 // ── M2 B3 hosts ──
 
 const MB_SCREENS = new Set(['menu-bar', 'user-dropdown']);
@@ -880,13 +1012,15 @@ function FixtureApp(): JSX.Element | null {
   const isMbScreen = MB_SCREENS.has(screen);
   const isPanelScreen = PANEL_SCREENS.has(screen);
   const isFileScreen = FILE_SCREENS.has(screen);
+  const isChatScreen = CHAT_SCREENS.has(screen);
   if (
     screen !== 'terminal-grid' &&
     !isPopoverScreen &&
     !isModalScreen &&
     !isMbScreen &&
     !isPanelScreen &&
-    !isFileScreen
+    !isFileScreen &&
+    !isChatScreen
   ) {
     console.error(`[fixture] 未登记的屏: ${screen}（fixture-main.tsx）`);
     return null;
@@ -909,6 +1043,15 @@ function FixtureApp(): JSX.Element | null {
   // B3 配置面板簇：生产 overlay 容器 + 面板组件（无 menubar 底图，裁决#4 单组件挂载）
   if (isPanelScreen) {
     return wrap(<FixturePanelHost key={fx.id} fx={fx} />);
+  }
+
+  // B5 chat 簇：生产 overlay 容器 + ChatHistoryPanel（裁决#4 单组件挂载，无底图）
+  if (isChatScreen) {
+    if (!fx.chat) {
+      console.error(`[fixture] ${fx.id}: 缺 chat payload`);
+      return null;
+    }
+    return wrap(<FixtureChatHost key={fx.id} fx={fx} />);
   }
 
   // B4 file 簇：file-panel 带 base 网格底图；file-temp-view 满幅自盖（base 仅供右栏终端内容）
