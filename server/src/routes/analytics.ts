@@ -64,31 +64,6 @@ const clearQuerySchema = {
   },
 };
 
-const dauQuerySchema = {
-  querystring: {
-    type: 'object' as const,
-    properties: {
-      from: { type: 'string' as const },
-      to: { type: 'string' as const },
-      source: { type: 'string' as const, enum: ['app', 'web', 'all'] },
-    },
-    additionalProperties: false,
-  },
-};
-
-const eventsQuerySchema = {
-  querystring: {
-    type: 'object' as const,
-    properties: {
-      from: { type: 'string' as const },
-      to: { type: 'string' as const },
-      metric: { type: 'string' as const },
-      source: { type: 'string' as const, enum: ['app', 'web', 'all'] },
-    },
-    additionalProperties: false,
-  },
-};
-
 // ---------------------------------------------------------------------------
 // Type helpers
 // ---------------------------------------------------------------------------
@@ -145,106 +120,6 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     );
 
     return { success: true, tracked: events.length };
-  });
-
-  // =========================================================================
-  // GET /analytics/dau — Daily active users (admin)
-  // =========================================================================
-
-  app.get<{
-    Querystring: { from?: string; to?: string; source?: 'web' | 'app' | 'all' };
-  }>('/dau', { schema: dauQuerySchema, preHandler: [authenticate] }, async (request) => {
-    const {
-      from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-        .toISOString()
-        .slice(0, 10),
-      to = new Date().toISOString().slice(0, 10),
-      source = 'app',
-    } = request.query;
-
-    let sql = `SELECT date,
-              COUNT(DISTINCT device_id) AS dau,
-              COUNT(DISTINCT user_id)   AS registered_users
-       FROM analytics_events
-       WHERE date >= $1 AND date <= $2`;
-    const params: unknown[] = [from, to];
-
-    if (source === 'app') {
-      sql += ` AND metric NOT LIKE 'web:%'`;
-    } else if (source === 'web') {
-      sql += ` AND metric LIKE 'web:%'`;
-    }
-    // source === 'all': no filter
-
-    sql += ` GROUP BY date ORDER BY date`;
-
-    const result = await query<{
-      date: string;
-      dau: string;
-      registered_users: string;
-    }>(sql, params);
-
-    return {
-      from,
-      to,
-      data: result.rows.map((r) => ({
-        date: r.date,
-        dau: Number(r.dau),
-        registered_users: Number(r.registered_users),
-      })),
-    };
-  });
-
-  // =========================================================================
-  // GET /analytics/events — Event aggregation (admin)
-  // =========================================================================
-
-  app.get<{
-    Querystring: { from?: string; to?: string; metric?: string; source?: 'web' | 'app' | 'all' };
-  }>('/events', { schema: eventsQuerySchema, preHandler: [authenticate] }, async (request) => {
-    const {
-      from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-        .toISOString()
-        .slice(0, 10),
-      to = new Date().toISOString().slice(0, 10),
-      metric,
-      source = 'app',
-    } = request.query;
-
-    let sql = `SELECT date, metric, SUM(value) AS total
-               FROM analytics_events
-               WHERE date >= $1 AND date <= $2`;
-    const params: unknown[] = [from, to];
-
-    if (source === 'app') {
-      sql += ` AND metric NOT LIKE 'web:%'`;
-    } else if (source === 'web') {
-      sql += ` AND metric LIKE 'web:%'`;
-    }
-    // source === 'all': no filter
-
-    if (metric) {
-      sql += ` AND metric = $${params.length + 1}`;
-      params.push(metric);
-    }
-
-    sql += ` GROUP BY date, metric ORDER BY date, metric`;
-
-    const result = await query<{
-      date: string;
-      metric: string;
-      total: string;
-    }>(sql, params);
-
-    return {
-      from,
-      to,
-      data: result.rows.map((r) => ({
-        date: r.date,
-        metric: r.metric,
-        total: Number(r.total),
-      })),
-    };
   });
 
   // =========================================================================

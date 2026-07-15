@@ -2,7 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Users } from './pages/Users';
-import { Analytics } from './pages/Analytics';
+import { Analytics } from './pages/analytics';
 import { Devices } from './pages/Devices';
 import { hasToken } from './lib/api';
 
