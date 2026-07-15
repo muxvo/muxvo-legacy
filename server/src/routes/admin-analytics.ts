@@ -489,7 +489,7 @@ export const adminAnalyticsRoutes: FastifyPluginAsync = async (app) => {
     Querystring: { app?: AppScope };
   }>('/churn', qs({ app: APP_PROP }), async (request) => {
     const { app: scope = 'all' } = request.query;
-    const filter = deviceAppFilterSql(scope, 'device_id');
+    const filter = deviceAppFilterSql(scope, 'devices.device_id');
     const scopeWhere = filter ? ` AND ${filter}` : '';
 
     const result = await query<{
@@ -565,7 +565,7 @@ export const adminAnalyticsRoutes: FastifyPluginAsync = async (app) => {
     Querystring: { app?: AppScope; granularity?: 'week' | 'month' };
   }>('/retention', qs({ app: APP_PROP, granularity: { type: 'string', enum: ['week', 'month'], default: 'week' } }), async (request) => {
     const { app: scope = 'all', granularity = 'week' } = request.query;
-    const ndFilter = deviceAppFilterSql(scope, 'device_id');
+    const ndFilter = deviceAppFilterSql(scope, 'devices.device_id');
     const ndWhere = ndFilter ? ` AND ${ndFilter}` : '';
 
     // --- a) Overall retention (D1 / D7 / D30), devices first seen in 60 days ---
