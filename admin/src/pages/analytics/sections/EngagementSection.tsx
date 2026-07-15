@@ -70,7 +70,7 @@ function StackedBars({ data }: { data: { date: string; new_users: number; return
           return (
             <div
               key={d.date}
-              className="flex-1 min-w-[2px] flex flex-col justify-end"
+              className="flex-1 min-w-[2px] h-full flex flex-col justify-end"
               title={`${d.date}  新增 ${d.new_users} · 回流 ${d.returning_users}`}
             >
               <div className="w-full rounded-sm overflow-hidden" style={{ height: `${h}%` }}>
