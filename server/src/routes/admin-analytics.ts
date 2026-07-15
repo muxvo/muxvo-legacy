@@ -492,31 +492,41 @@ export const adminAnalyticsRoutes: FastifyPluginAsync = async (app) => {
     const filter = deviceAppFilterSql(scope, 'devices.device_id');
     const scopeWhere = filter ? ` AND ${filter}` : '';
 
+    // Each window uses its OWN eligible denominator: a device can only "churn"
+    // at N days if it has existed at least N days. Sharing the 7d denominator
+    // pulls too-young devices into the 14/30d rates and systematically
+    // under-reports them (churn_30d was ~2x low).
     const result = await query<{
-      churn_7d: string; churn_14d: string; churn_30d: string; total_devices: string;
+      churn_7d: string; elig_7d: string;
+      churn_14d: string; elig_14d: string;
+      churn_30d: string; elig_30d: string;
+      total_devices: string;
     }>(
       `SELECT
          COUNT(*) FILTER (WHERE last_seen_at < NOW() - INTERVAL '7 days')::text AS churn_7d,
+         COUNT(*) FILTER (WHERE first_seen_at < NOW() - INTERVAL '7 days')::text AS elig_7d,
          COUNT(*) FILTER (WHERE last_seen_at < NOW() - INTERVAL '14 days')::text AS churn_14d,
+         COUNT(*) FILTER (WHERE first_seen_at < NOW() - INTERVAL '14 days')::text AS elig_14d,
          COUNT(*) FILTER (WHERE last_seen_at < NOW() - INTERVAL '30 days')::text AS churn_30d,
+         COUNT(*) FILTER (WHERE first_seen_at < NOW() - INTERVAL '30 days')::text AS elig_30d,
          COUNT(*)::text AS total_devices
        FROM devices
-       WHERE first_seen_at < NOW() - INTERVAL '7 days'${scopeWhere}`,
+       WHERE TRUE${scopeWhere}`,
     );
 
     const row = result.rows[0];
-    const total = Number(row.total_devices);
-    const churn7d = Number(row.churn_7d);
-    const churn14d = Number(row.churn_14d);
-    const churn30d = Number(row.churn_30d);
-    const rate = (n: number) => (total > 0 ? Math.round((n / total) * 1000) / 10 : 0);
+    const win = (count: string, eligible: string) => {
+      const c = Number(count);
+      const e = Number(eligible);
+      return { count: c, eligible: e, rate: e > 0 ? Math.round((c / e) * 1000) / 10 : 0 };
+    };
 
     return {
       app: scope,
-      total_devices: total,
-      churn_7d: { count: churn7d, rate: rate(churn7d) },
-      churn_14d: { count: churn14d, rate: rate(churn14d) },
-      churn_30d: { count: churn30d, rate: rate(churn30d) },
+      total_devices: Number(row.total_devices),
+      churn_7d: win(row.churn_7d, row.elig_7d),
+      churn_14d: win(row.churn_14d, row.elig_14d),
+      churn_30d: win(row.churn_30d, row.elig_30d),
     };
   });
 

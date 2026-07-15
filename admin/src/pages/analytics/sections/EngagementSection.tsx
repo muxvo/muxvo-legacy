@@ -183,6 +183,9 @@ export function EngagementSection({ from, to, app }: { from: string; to: string;
             formatValue={(v) => formatDuration(v)}
           />
         </AsyncBlock>
+        <p className="text-xs text-gray-500 mt-3">
+          基于心跳估算（老版 30min/新版 10min 粒度），非实测会话时长；「全部」维度下混合两种权重。
+        </p>
       </Panel>
     </>
   );

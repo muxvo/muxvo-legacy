@@ -3,12 +3,19 @@ const DEVICE_ID_KEY = 'muxvo_device_id';
 const ATTRIBUTION_KEY = 'muxvo_attribution';
 
 function getDeviceId(): string {
-  let id = localStorage.getItem(DEVICE_ID_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(DEVICE_ID_KEY, id);
+  // Storage may be fully disabled (private mode, sandboxed iframe, "block all
+  // cookies"). Never let that throw synchronously into a caller's click
+  // handler — degrade to an ephemeral per-call id instead.
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return crypto.randomUUID();
   }
-  return id;
 }
 
 /**
