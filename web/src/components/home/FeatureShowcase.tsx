@@ -53,10 +53,7 @@ export function FeatureShowcase() {
       </div>
 
       {FEATURES.map((f, i) => (
-        <div
-          key={i}
-          className={`mv-showcase${i % 2 === 1 ? ' mv-showcase--reverse' : ''}`}
-        >
+        <div key={i} className="mv-showcase">
           <div className="mv-showcase__text fade-up">
             <div className="mv-showcase__icon">{f.icon}</div>
             <h3 className="mv-showcase__title">{f.title}</h3>

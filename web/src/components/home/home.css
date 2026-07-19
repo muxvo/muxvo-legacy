@@ -80,7 +80,7 @@
 .mv-hero__mock {
   position: relative;
   z-index: 1;
-  max-width: 1060px;
+  max-width: 1376px; /* 与下方功能截图同宽 */
   margin: 56px auto 0;
 }
 
@@ -234,30 +234,24 @@
   line-height: 1.15;
 }
 
-/* Each showcase row */
+/* Each showcase block —— 文字居中在上，截图整行铺满 */
 .mv-showcase {
-  display: grid;
-  grid-template-columns: 2fr 3fr;
-  gap: 48px;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  max-width: 1120px;
+  gap: 36px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 64px 24px;
+  padding: 72px 32px;
 }
 
-.mv-showcase--reverse {
-  grid-template-columns: 3fr 2fr;
-}
-
-.mv-showcase--reverse .mv-showcase__image {
-  order: -1;
-}
-
-/* Text side */
+/* Text on top, centered */
 .mv-showcase__text {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  align-items: center;
+  text-align: center;
+  max-width: 720px;
 }
 
 .mv-showcase__icon {
@@ -275,7 +269,7 @@
 }
 
 .mv-showcase__title {
-  font-size: clamp(20px, 2.5vw, 26px);
+  font-size: clamp(22px, 2.8vw, 30px);
   font-weight: 700;
   color: var(--text-after);
   margin-bottom: 12px;
@@ -289,9 +283,10 @@
   color: var(--text-after-sec);
 }
 
-/* Image side */
+/* Full-width screenshot */
 .mv-showcase__image {
   position: relative;
+  width: 100%;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid rgba(232, 167, 72, 0.15);
@@ -403,17 +398,8 @@
   }
 
   .mv-showcase {
-    grid-template-columns: 1fr;
-    gap: 32px;
+    gap: 28px;
     padding: 48px 24px;
-  }
-
-  .mv-showcase--reverse {
-    grid-template-columns: 1fr;
-  }
-
-  .mv-showcase--reverse .mv-showcase__image {
-    order: 0;
   }
 }
 

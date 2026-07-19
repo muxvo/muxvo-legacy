@@ -3,9 +3,9 @@
  *
  * 验证目标：
  * 1. Hero 区包含真实产品截图（不是 CSS 模拟终端）
- * 2. 4 个 Feature Showcase 区段各含截图 + 标题
+ * 2. 6 个 Feature Showcase 区段各含截图 + 标题
  * 3. 所有截图能正常加载（naturalWidth > 0）
- * 4. 交替布局正确（奇数行反转）
+ * 4. 截图整行铺满（渲染宽度接近视口宽）
  */
 import { test, expect, chromium } from '@playwright/test';
 
@@ -96,7 +96,7 @@ test.describe('官网截图展示验证', () => {
     }
   });
 
-  test('交替布局：奇数索引区段有 reverse 类', async () => {
+  test('截图整行铺满：渲染宽度接近视口宽', async () => {
     const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
@@ -105,16 +105,13 @@ test.describe('官网截图展示验证', () => {
 
       const showcases = page.locator('.mv-showcase');
 
-      // 索引 0, 2, 4 不含 reverse
-      for (const idx of [0, 2, 4]) {
-        const cls = await showcases.nth(idx).getAttribute('class');
-        expect(cls).not.toContain('mv-showcase--reverse');
-      }
-
-      // 索引 1, 3, 5 含 reverse
-      for (const idx of [1, 3, 5]) {
-        const cls = await showcases.nth(idx).getAttribute('class');
-        expect(cls).toContain('mv-showcase--reverse');
+      for (let i = 0; i < 6; i++) {
+        const img = showcases.nth(i).locator('.mv-showcase__image img');
+        await img.scrollIntoViewIfNeeded();
+        const box = await img.boundingBox();
+        // 1440 视口、容器左右各 32px padding → 截图应接近 1376px 宽
+        expect(box).not.toBeNull();
+        expect(box!.width).toBeGreaterThan(1200);
       }
     } finally {
       await browser.close();
