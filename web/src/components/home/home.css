@@ -371,6 +371,15 @@
   flex-wrap: wrap;
 }
 
+.mv-hero__note {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-after-sec);
+  opacity: 0.6;
+  margin-top: 14px;
+  letter-spacing: 0.02em;
+}
+
 .mv-cta__note {
   font-family: var(--font-mono);
   font-size: 12px;

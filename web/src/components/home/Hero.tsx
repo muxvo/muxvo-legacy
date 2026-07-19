@@ -23,6 +23,11 @@ export function Hero() {
             下载 macOS 版
           </a>
         </div>
+        <p className="mv-hero__note">
+          {arch === 'x64'
+            ? 'Muxvo 2.0 起仅支持 Apple Silicon（M 系列）；Intel Mac 可下载旧版 0.5.0（不再更新）'
+            : '适用于 Apple Silicon（M 系列）· macOS 14+'}
+        </p>
       </div>
 
       {/* Real product screenshot */}
