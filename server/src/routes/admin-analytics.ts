@@ -17,19 +17,21 @@ type AppScope = 'all' | 'legacy' | 'muxvo2';
 
 /**
  * Row-level SQL predicate (without a leading AND) restricting analytics_events
- * rows to the requested app scope, or '' for 'all'.
+ * rows to the requested app scope.
  *   legacy  — old Electron app: no `app` metadata key and not a web: event
  *   muxvo2  — new Swift app: metadata.app = 'muxvo2'
- * Cross-end (web) events are never attributable to a single app scope.
+ *   all     — union of both apps; web: events stay out (an anonymous site
+ *             visitor is not an active device — web traffic is reported by the
+ *             Growth endpoints, which query web: metrics directly)
  */
-function appFilterSql(app: AppScope): string {
+export function appFilterSql(app: AppScope): string {
   if (app === 'legacy') return `metric NOT LIKE 'web:%' AND metadata->>'app' IS NULL`;
   if (app === 'muxvo2') return `metadata->>'app' = 'muxvo2'`;
-  return '';
+  return `metric NOT LIKE 'web:%'`;
 }
 
-/** appFilterSql wrapped as ` AND (...)`, or '' for 'all'. */
-function andApp(app: AppScope): string {
+/** appFilterSql wrapped as ` AND (...)`, or '' when the predicate is empty. */
+export function andApp(app: AppScope): string {
   const f = appFilterSql(app);
   return f ? ` AND (${f})` : '';
 }
@@ -113,9 +115,14 @@ export const adminAnalyticsRoutes: FastifyPluginAsync = async (app) => {
                  COUNT(DISTINCT user_id)   AS registered_users
                FROM analytics_events
                WHERE date >= $1 AND date <= $2`;
-    sql += andApp(scope);
-    if (source === 'app') sql += ` AND metric NOT LIKE 'web:%'`;
-    else if (source === 'web') sql += ` AND metric LIKE 'web:%'`;
+    // source=web asks for site-visitor rows, which every app scope now
+    // excludes — honor it by skipping the app filter instead of AND-ing
+    // the two into an always-empty predicate.
+    if (source === 'web') sql += ` AND metric LIKE 'web:%'`;
+    else {
+      sql += andApp(scope);
+      if (source === 'app') sql += ` AND metric NOT LIKE 'web:%'`;
+    }
     sql += ` GROUP BY date ORDER BY date`;
 
     const result = await query<{ date: string; dau: string; registered_users: string }>(
